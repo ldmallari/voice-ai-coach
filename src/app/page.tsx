@@ -32,6 +32,68 @@ const PRIORITY_STYLE: Record<ActionItem['priority'], string> = {
   low: 'bg-neutral-200 text-neutral-600',
 };
 
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: (event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
+  onerror: () => void;
+  onend: () => void;
+  start: () => void;
+  stop: () => void;
+};
+
+/** Renders bold spans within a single line of the coach's markdown-ish text. */
+function renderInline(line: string) {
+  return line.split(/(\*\*[^*]+\*\*)/g).map((part, index) =>
+    part.startsWith('**') && part.endsWith('**') ? (
+      <strong key={index}>{part.slice(2, -2)}</strong>
+    ) : (
+      <span key={index}>{part}</span>
+    ),
+  );
+}
+
+/**
+ * Lightweight renderer for the coach's answers: paragraphs, bullet lists and
+ * bold. Answers come from our own model, and this builds React nodes (no raw
+ * HTML), so there is no injection surface — and no markdown dependency to ship.
+ */
+function RichText({ content }: { content: string }) {
+  const lines = content.split('\n');
+  return (
+    <div className="space-y-1.5">
+      {lines.map((line, index) => {
+        const trimmed = line.trim();
+        if (!trimmed) return null;
+        if (/^[-*]\s+/.test(trimmed)) {
+          return (
+            <div key={index} className="flex gap-2">
+              <span className="text-neutral-400">•</span>
+              <span>{renderInline(trimmed.replace(/^[-*]\s+/, ''))}</span>
+            </div>
+          );
+        }
+        return <p key={index}>{renderInline(trimmed)}</p>;
+      })}
+    </div>
+  );
+}
+
+/**
+ * The browser's built-in speech recognition, when available. Preferred for voice
+ * input because it is instant and free; Fish Audio ASR is the server fallback.
+ */
+function getSpeechRecognition(): SpeechRecognitionLike | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  return Ctor ? new Ctor() : null;
+}
+
 export default function Home() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState('');
@@ -50,6 +112,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -135,9 +198,30 @@ export default function Home() {
 
   async function toggleRecording() {
     if (recording) {
+      recognitionRef.current?.stop();
       recorderRef.current?.stop();
       return;
     }
+
+    // Primary: the browser's speech recognition — instant, and works without
+    // Fish Audio API credit. Falls back to Fish ASR when the browser lacks it.
+    const recognition = getSpeechRecognition();
+    if (recognition) {
+      recognition.lang = 'en-US';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = (event) => {
+        const transcript = event.results[0]?.[0]?.transcript ?? '';
+        if (transcript) void ask(transcript);
+      };
+      recognition.onerror = () => setRecording(false);
+      recognition.onend = () => setRecording(false);
+      recognitionRef.current = recognition;
+      recognition.start();
+      setRecording(true);
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -270,7 +354,11 @@ export default function Home() {
                 : 'rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-sm'
             }
           >
-            <p className="whitespace-pre-wrap">{turn.content}</p>
+            {turn.role === 'assistant' ? (
+              <RichText content={turn.content} />
+            ) : (
+              <p className="whitespace-pre-wrap">{turn.content}</p>
+            )}
             {turn.sources && turn.sources.length > 0 && (
               <p className="mt-2 text-xs text-neutral-500">
                 Source: {turn.sources.join(' and ')}
