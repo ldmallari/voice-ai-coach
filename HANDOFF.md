@@ -58,7 +58,7 @@ is the production line and the merge is the deploy gate.
 |---|---|---|---|
 | Knowledge Ingest | `8K5CuLYnrtpdg7YY` | `/webhook/coach-ingest` | ✅ live |
 | Knowledge Retrieval | `PYTsapmIGNDP4wDo` | `/webhook/coach-retrieve` | ✅ live |
-| Main Orchestration (DeepSeek agent) | `jb1YGfVUXUQwZ5re` | `/webhook/coach-chat` | ✅ knowledge path live; metrics HTTP tool awaits the Vercel URL |
+| Main Orchestration (DeepSeek agent) | `0EVPI3YIuG4dom3b` | `/webhook/coach-chat` | ✅ metrics + knowledge live end-to-end |
 
 Credentials wired: Cohere (`uxtOtEIzqzq68DNt`), DeepSeek (`7lhVEg2d90IJdEYp`),
 Supabase (`fQiSXhORB0qR3ugh`). The Supabase credential must use the **service-role**
@@ -103,24 +103,26 @@ key (host `https://zxjbxogadvincdzpshst.supabase.co`).
 - `n8n/ingest.workflow.ts` and `n8n/retrieval.workflow.ts` — written and committed,
   **not yet deployed** to the Railway instance
 
-## Remaining, in priority order
+## Live
 
-1. **Vercel deploy** — connect the GitHub repo (Production branch = `main`; the
-   `mvp` branch gets Preview deploys). Set env vars from `.env.local`
-   (DEEPSEEK_*, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, COHERE_API_KEY,
-   COACH_TOOL_SECRET, FISH_AUDIO_API_KEY, N8N_RETRIEVAL_URL, N8N_INGEST_URL).
-2. **After Vercel is live** (Claude does these):
-   - Update the Main Orchestration "Clinic Metrics" tool URL from the placeholder
-     `https://voice-ai-coach.vercel.app/api/tools` to the real deployment URL.
-   - Set `N8N_COACH_URL=…/webhook/coach-chat` in Vercel env so n8n becomes the
-     primary path, then test the metrics path through n8n end-to-end.
-3. **Fish Audio API credit** — top up to enable server-side Fish ASR (voice input
-   currently works via the browser).
-4. **Branch protection on `main`** — require the CI check before merge (the second
+**Production: https://voice-ai-coach.vercel.app** (Vercel project `voice-ai-coach`,
+GitHub-connected, prod branch `main`). Verified end-to-end on production: chat
+(metrics + knowledge, both routed through the n8n `coach-chat` agent), voice
+output (Fish TTS), and document upload → n8n ingest → retrieval. Vercel env vars
+set for production + preview; `N8N_COACH_URL` points at the coach-chat webhook.
+
+## Remaining (optional polish)
+
+1. **Merge PR #1 to `main`** — production currently comes from a manual CLI deploy
+   of the `mvp` branch. Merging (CI-gated) makes `main` the production source.
+2. **Branch protection on `main`** — require the CI check before merge (the second
    half of the deploy gate).
+3. **Fish Audio API credit** — top up to enable server-side Fish ASR (voice input
+   works today via the browser's speech recognition).
 
-Done: n8n workflows deployed + active, document upload, voice I/O, saved sessions
-and action plan, n8n main orchestration, CI + deploy gate.
+Done: Vercel deploy, all n8n workflows, document upload, voice I/O, saved sessions
+and action plan, n8n main orchestration (metrics + knowledge), CI + deploy gate,
+Supabase grants fix. 95 tests, CI green.
 
 ## Gotchas already hit
 
