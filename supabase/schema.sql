@@ -35,14 +35,14 @@ create index if not exists customers_last_visit_idx on customers (last_visit des
 --
 -- Shaped to LangChain's Supabase convention so n8n's Supabase Vector Store node
 -- can insert and query it directly, rather than needing a bespoke adapter.
--- 384 dimensions matches sentence-transformers/all-MiniLM-L6-v2, served free
--- through Hugging Face Inference.
+-- 1024 dimensions matches Cohere embed-english-v3.0, used on Cohere's free tier
+-- via n8n's native Embeddings Cohere node.
 -- ---------------------------------------------------------------------------
 create table if not exists documents (
   id        bigserial primary key,
   content   text,
   metadata  jsonb,
-  embedding vector(384)
+  embedding vector(1024)
 );
 
 -- Approximate nearest neighbour over cosine distance.
@@ -51,7 +51,7 @@ create index if not exists documents_embedding_idx
 
 -- Signature required by the LangChain / n8n Supabase vector store integration.
 create or replace function match_documents (
-  query_embedding vector(384),
+  query_embedding vector(1024),
   match_count     int default 5,
   filter          jsonb default '{}'
 )
