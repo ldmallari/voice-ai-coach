@@ -13,7 +13,8 @@ Built for the V-Unite applicant challenge.
 | Database + vectors | Supabase (Postgres + pgvector) |
 | Orchestration | n8n (main backend / orchestration layer) |
 | Voice in/out | Fish Audio |
-| LLM | Anthropic Claude |
+| Embeddings | See note below — DeepSeek has no embeddings endpoint |
+| LLM | DeepSeek (`deepseek-chat`, OpenAI-compatible, tool calling) |
 | CI | GitHub Actions |
 
 ## Architecture

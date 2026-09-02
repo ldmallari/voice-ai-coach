@@ -1,5 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
+import type OpenAI from 'openai';
 import { classifyQuestion, describePath } from './router';
+import { COACH_MODEL, llmClient } from './llm';
 import {
   averageSatisfaction,
   averageSpend,
@@ -16,27 +17,24 @@ import type { CustomerRecord, RetrievalPath } from './types';
 /**
  * The coaching agent.
  *
- * Deliberately a tool-use loop rather than one prompt with everything stuffed in:
- * the model asks for the figures it actually needs, which keeps token cost down and
- * makes the reasoning inspectable. Every number in an answer comes from a tool
- * result computed in code, never from the model's own arithmetic.
+ * A tool-use loop rather than one prompt with everything stuffed in: the model asks
+ * for the figures it actually needs, which keeps token cost down (the challenge runs
+ * on a small credit) and makes the reasoning inspectable. Every number in an answer
+ * comes from a tool result computed in code, never from the model's own arithmetic.
  */
-
-export const COACH_MODEL = 'claude-sonnet-5';
-
-/** Data the agent can reach. Injected so tests can run without a database. */
-export interface CoachContext {
-  records: CustomerRecord[];
-  /** Returns relevant clinic-document passages for a question. */
-  searchKnowledge: (query: string) => Promise<KnowledgeHit[]>;
-  /** Overridable for deterministic date maths in tests. */
-  now?: Date;
-}
 
 export interface KnowledgeHit {
   title: string;
   content: string;
   similarity: number;
+}
+
+/** Data the agent can reach. Injected so tests run without a database or network. */
+export interface CoachContext {
+  records: CustomerRecord[];
+  searchKnowledge: (query: string) => Promise<KnowledgeHit[]>;
+  /** Overridable for deterministic date maths in tests. */
+  now?: Date;
 }
 
 export interface CoachAnswer {
@@ -59,55 +57,70 @@ Rules:
 - Give specific coaching tied to this clinic's numbers, not generic business advice.
 - When the data shows a likely cause, say so and name the next action.
 - If the data cannot answer something, say that plainly instead of guessing.
+- Keep answers short enough to be spoken aloud.
 
 Weak answer: "There are many possible reasons your sales might be declining."
 Better: "Your consultation volume is healthy, but CoolSculpting conversion is well
 below your other treatments. Look at what happens during those consultations."`;
 
-/** Tool schemas exposed to the model. */
-const TOOLS: Anthropic.Tool[] = [
+const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
-    name: 'get_clinic_overview',
-    description:
-      'Headline clinic metrics: conversion rate, rebooking rate, average spend, total revenue, average satisfaction and retention. Use this first for broad questions.',
-    input_schema: { type: 'object', properties: {} },
+    type: 'function',
+    function: {
+      name: 'get_clinic_overview',
+      description:
+        'Headline clinic metrics: conversion rate, rebooking rate, average spend, total revenue, average satisfaction and 90-day retention. Use for broad questions.',
+      parameters: { type: 'object', properties: {} },
+    },
   },
   {
-    name: 'get_treatment_performance',
-    description:
-      'Per-treatment conversion, rebooking, average spend and satisfaction, worst-converting first. Use when asking which treatment or service is underperforming.',
-    input_schema: { type: 'object', properties: {} },
+    type: 'function',
+    function: {
+      name: 'get_treatment_performance',
+      description:
+        'Per-treatment conversion, rebooking, average spend and satisfaction, worst-converting first. Use when asking which treatment or service is underperforming.',
+      parameters: { type: 'object', properties: {} },
+    },
   },
   {
-    name: 'get_provider_performance',
-    description:
-      'Per-provider conversion and rebooking, weakest first. Use when asking who needs coaching or attention.',
-    input_schema: { type: 'object', properties: {} },
+    type: 'function',
+    function: {
+      name: 'get_provider_performance',
+      description:
+        'Per-provider conversion and rebooking, weakest first. Use when asking who needs coaching or attention.',
+      parameters: { type: 'object', properties: {} },
+    },
   },
   {
-    name: 'get_lapsed_customers',
-    description:
-      'Customers whose last visit is older than a given number of days. Use for follow-up and retention questions.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        days: {
-          type: 'number',
-          description: 'How many days without a visit counts as lapsed. Default 90.',
+    type: 'function',
+    function: {
+      name: 'get_lapsed_customers',
+      description:
+        'Customers whose last visit is older than a given number of days. Use for follow-up and retention questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: {
+            type: 'number',
+            description: 'Days without a visit that counts as lapsed. Default 90.',
+          },
         },
       },
     },
   },
   {
-    name: 'search_clinic_knowledge',
-    description:
-      "Semantic search over the clinic's uploaded documents (policies, SOPs, pricing, scripts). Use when the answer should come from the clinic's own material.",
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'What to look for in the documents.' },
+    type: 'function',
+    function: {
+      name: 'search_clinic_knowledge',
+      description:
+        "Semantic search over the clinic's uploaded documents (policies, SOPs, pricing, scripts). Use when the answer should come from the clinic's own material.",
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What to look for in the documents.' },
+        },
+        required: ['query'],
       },
-      required: ['query'],
     },
   },
 ];
@@ -162,8 +175,7 @@ async function runTool(
     }
 
     case 'search_clinic_knowledge': {
-      const query = String(input.query ?? '');
-      const hits = await context.searchKnowledge(query);
+      const hits = await context.searchKnowledge(String(input.query ?? ''));
       return hits.length > 0
         ? hits
         : { note: 'No matching content in the uploaded documents.' };
@@ -181,6 +193,19 @@ function sourceForTool(name: string): string | null {
   return null;
 }
 
+/** Parses tool arguments defensively; a malformed blob must not kill the turn. */
+function parseArguments(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Answers one coaching question.
  * `maxTurns` bounds the tool loop so a confused model cannot spin indefinitely.
@@ -188,17 +213,17 @@ function sourceForTool(name: string): string | null {
 export async function coach(
   question: string,
   context: CoachContext,
-  client?: Anthropic,
+  client?: OpenAI,
   maxTurns = 5,
 ): Promise<CoachAnswer> {
-  const anthropic =
-    client ?? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
-
+  const llm = client ?? llmClient();
   const path = classifyQuestion(question);
-  const messages: Anthropic.MessageParam[] = [
+
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `${question}\n\n(Routing hint: this question likely needs ${describePath(path)}.)`,
+      content: `${question}\n\n(Routing hint: this likely needs ${describePath(path)}.)`,
     },
   ];
 
@@ -206,49 +231,44 @@ export async function coach(
   const sources = new Set<string>();
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    const response = await anthropic.messages.create({
+    const response = await llm.chat.completions.create({
       model: COACH_MODEL,
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      tools: TOOLS,
       messages,
+      tools: TOOLS,
     });
 
-    const toolUses = response.content.filter(
-      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
-    );
+    const message = response.choices[0]?.message;
+    const requested = message?.tool_calls ?? [];
 
-    if (toolUses.length === 0) {
-      const text = response.content
-        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-        .map((block) => block.text)
-        .join('\n')
-        .trim();
-
-      return { answer: text, sources: [...sources], path, toolCalls };
+    if (requested.length === 0) {
+      return {
+        answer: (message?.content ?? '').trim(),
+        sources: [...sources],
+        path,
+        toolCalls,
+      };
     }
 
-    messages.push({ role: 'assistant', content: response.content });
+    messages.push(message!);
 
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    for (const use of toolUses) {
-      toolCalls.push(use.name);
-      const source = sourceForTool(use.name);
+    for (const call of requested) {
+      const name = call.function.name;
+      toolCalls.push(name);
+
+      const source = sourceForTool(name);
       if (source) sources.add(source);
 
       const result = await runTool(
-        use.name,
-        (use.input ?? {}) as Record<string, unknown>,
+        name,
+        parseArguments(call.function.arguments),
         context,
       );
-      results.push({
-        type: 'tool_result',
-        tool_use_id: use.id,
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
         content: JSON.stringify(result),
       });
     }
-
-    messages.push({ role: 'user', content: results });
   }
 
   // Loop exhausted: say so rather than returning a half-formed answer.

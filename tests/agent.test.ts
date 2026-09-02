@@ -1,26 +1,47 @@
 import { describe, expect, it, vi } from 'vitest';
-import type Anthropic from '@anthropic-ai/sdk';
+import type OpenAI from 'openai';
 import { coach, type CoachContext } from '@/lib/agent';
 import { generateCustomers } from '@/lib/synthetic';
 
 /**
- * The Anthropic API is mocked throughout. CI must never spend credit, and the
- * behaviour under test is our orchestration, not the model's wording.
+ * The DeepSeek API is mocked throughout. CI must never spend the challenge credit,
+ * and the behaviour under test is our orchestration, not the model's wording.
  */
 
-/** Builds a fake client that returns the given responses in order. */
-function fakeClient(responses: unknown[]): Anthropic {
+function fakeClient(responses: unknown[]): OpenAI {
   const create = vi.fn();
   for (const response of responses) create.mockResolvedValueOnce(response);
-  return { messages: { create } } as unknown as Anthropic;
+  return { chat: { completions: { create } } } as unknown as OpenAI;
 }
 
-function textResponse(text: string) {
-  return { content: [{ type: 'text', text }] };
+/** Shorthand for the mock's recorded calls. */
+function callsOf(client: OpenAI) {
+  return (client.chat.completions.create as unknown as ReturnType<typeof vi.fn>).mock
+    .calls;
 }
 
-function toolResponse(name: string, input: Record<string, unknown> = {}) {
-  return { content: [{ type: 'tool_use', id: `tool_${name}`, name, input }] };
+function textResponse(content: string) {
+  return { choices: [{ message: { role: 'assistant', content } }] };
+}
+
+function toolResponse(name: string, args: Record<string, unknown> = {}) {
+  return {
+    choices: [
+      {
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: `call_${name}`,
+              type: 'function',
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        },
+      },
+    ],
+  };
 }
 
 function context(overrides: Partial<CoachContext> = {}): CoachContext {
@@ -30,6 +51,12 @@ function context(overrides: Partial<CoachContext> = {}): CoachContext {
     now: new Date('2026-09-01T00:00:00Z'),
     ...overrides,
   };
+}
+
+/** Reads the tool result handed back to the model on a given call index. */
+function toolPayload(client: OpenAI, callIndex: number) {
+  const messages = callsOf(client)[callIndex][0].messages;
+  return JSON.parse(messages.at(-1).content);
 }
 
 describe('coach', () => {
@@ -51,8 +78,7 @@ describe('coach', () => {
 
     expect(result.toolCalls).toEqual(['get_treatment_performance']);
     expect(result.answer).toContain('CoolSculpting');
-    // Two round trips: one to request the tool, one to answer with the result.
-    expect(client.messages.create).toHaveBeenCalledTimes(2);
+    expect(callsOf(client)).toHaveLength(2);
   });
 
   it('computes tool figures in code, not in the model', async () => {
@@ -62,16 +88,21 @@ describe('coach', () => {
     ]);
 
     await coach('Give me an overview', context(), client);
-
-    // Inspect what was handed back to the model on the second call.
-    const secondCall = (client.messages.create as ReturnType<typeof vi.fn>).mock
-      .calls[1][0];
-    const toolResult = secondCall.messages.at(-1).content[0];
-    const payload = JSON.parse(toolResult.content);
+    const payload = toolPayload(client, 1);
 
     expect(payload.consultations).toBe(60);
     expect(payload.conversionRate).toBeGreaterThan(0);
     expect(payload.conversionRate).toBeLessThanOrEqual(1);
+  });
+
+  it('honours tool arguments sent by the model', async () => {
+    const client = fakeClient([
+      toolResponse('get_lapsed_customers', { days: 30 }),
+      textResponse('done'),
+    ]);
+
+    await coach('Who has not been in for a month?', context(), client);
+    expect(toolPayload(client, 1).days).toBe(30);
   });
 
   it('cites the customer data source when a data tool ran', async () => {
@@ -93,7 +124,11 @@ describe('coach', () => {
       textResponse('Your SOP says to confirm pricing.'),
     ]);
 
-    const result = await coach('What does our SOP recommend?', context({ searchKnowledge }), client);
+    const result = await coach(
+      'What does our SOP recommend?',
+      context({ searchKnowledge }),
+      client,
+    );
 
     expect(searchKnowledge).toHaveBeenCalledWith('consultation script');
     expect(result.sources).toContain('uploaded clinic documents');
@@ -106,15 +141,40 @@ describe('coach', () => {
     ]);
 
     await coach('What is our refund policy?', context(), client);
+    expect(toolPayload(client, 1).note).toMatch(/No matching content/i);
+  });
 
-    const secondCall = (client.messages.create as ReturnType<typeof vi.fn>).mock
-      .calls[1][0];
-    const payload = JSON.parse(secondCall.messages.at(-1).content[0].content);
-    expect(payload.note).toMatch(/No matching content/i);
+  it('survives malformed tool arguments rather than throwing', async () => {
+    // Failure case: the model emits invalid JSON for its arguments.
+    const client = fakeClient([
+      {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'call_bad',
+                  type: 'function',
+                  function: { name: 'get_lapsed_customers', arguments: '{days: 30' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      textResponse('recovered'),
+    ]);
+
+    const result = await coach('Who lapsed?', context(), client);
+
+    // Falls back to the documented default rather than crashing.
+    expect(toolPayload(client, 1).days).toBe(90);
+    expect(result.answer).toBe('recovered');
   });
 
   it('stops and says so when the model loops without answering', async () => {
-    // Failure case: the model keeps calling tools and never produces text.
     const client = fakeClient([
       toolResponse('get_clinic_overview'),
       toolResponse('get_clinic_overview'),
@@ -125,8 +185,7 @@ describe('coach', () => {
 
     expect(result.answer).toMatch(/could not settle on an answer/i);
     expect(result.toolCalls).toHaveLength(3);
-    // Bounded: it did not keep calling past the limit.
-    expect(client.messages.create).toHaveBeenCalledTimes(3);
+    expect(callsOf(client)).toHaveLength(3);
   });
 
   it('surfaces an unknown tool as an error rather than crashing the turn', async () => {
@@ -137,10 +196,7 @@ describe('coach', () => {
 
     const result = await coach('Anything', context(), client);
 
-    const secondCall = (client.messages.create as ReturnType<typeof vi.fn>).mock
-      .calls[1][0];
-    const payload = JSON.parse(secondCall.messages.at(-1).content[0].content);
-    expect(payload.error).toMatch(/Unknown tool/);
+    expect(toolPayload(client, 1).error).toMatch(/Unknown tool/);
     expect(result.answer).toBe('recovered');
   });
 });

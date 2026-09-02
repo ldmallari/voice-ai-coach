@@ -4,6 +4,7 @@ import { coach } from '@/lib/agent';
 import { loadRecords } from '@/lib/records';
 import { searchKnowledge } from '@/lib/knowledge';
 import { isSupabaseConfigured } from '@/lib/supabase';
+import { isLlmConfigured } from '@/lib/llm';
 
 const RequestSchema = z.object({
   question: z.string().min(1).max(2000),
@@ -18,9 +19,9 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!isLlmConfigured()) {
     return NextResponse.json(
-      { error: 'ANTHROPIC_API_KEY is not configured on the server.' },
+      { error: 'DEEPSEEK_API_KEY is not configured on the server.' },
       { status: 503 },
     );
   }
