@@ -4,9 +4,12 @@ import { coach } from '@/lib/agent';
 import { loadRecords } from '@/lib/records';
 import { isKnowledgeConfigured, searchKnowledge } from '@/lib/knowledge';
 import { isLlmConfigured } from '@/lib/llm';
+import { sessionStore } from '@/lib/sessions';
 
 const RequestSchema = z.object({
   question: z.string().min(1).max(2000),
+  /** Optional: when present, both turns are appended to the session record. */
+  sessionId: z.string().min(1).optional(),
 });
 
 export async function POST(request: Request) {
@@ -28,7 +31,14 @@ export async function POST(request: Request) {
   try {
     const records = await loadRecords();
 
-    const result = await coach(parsed.data.question, {
+    const { question, sessionId } = parsed.data;
+    const store = sessionId ? sessionStore() : null;
+
+    if (store && sessionId) {
+      await store.append(sessionId, { role: 'user', content: question, sources: [] });
+    }
+
+    const result = await coach(question, {
       records,
       // Knowledge search needs both Supabase and an embedding key; degrade to an
       // empty result rather than failing the whole request.
@@ -37,6 +47,14 @@ export async function POST(request: Request) {
         return searchKnowledge(query);
       },
     });
+
+    if (store && sessionId) {
+      await store.append(sessionId, {
+        role: 'assistant',
+        content: result.answer,
+        sources: result.sources,
+      });
+    }
 
     return NextResponse.json(result);
   } catch (error) {

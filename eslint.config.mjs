@@ -5,7 +5,7 @@ import nextCoreWebVitals from 'eslint-config-next/core-web-vitals';
 const config = [
   ...next,
   ...nextCoreWebVitals,
-  { ignores: ['.next/**', 'node_modules/**', 'coverage/**', 'next-env.d.ts'] },
+  { ignores: ['.next/**', 'node_modules/**', 'coverage/**', 'next-env.d.ts', 'n8n/**'] },
 ];
 
 export default config;

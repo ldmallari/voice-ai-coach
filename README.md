@@ -34,19 +34,19 @@ rather than generic advice.
 ## Requirements checklist
 
 - [ ] Deployed web application (Vercel)
-- [ ] Chat mode
+- [x] Chat mode
 - [ ] Voice input
 - [ ] Voice response
-- [ ] Supabase for clinic/customer data
-- [ ] 50+ synthetic customer records
+- [x] Supabase for clinic/customer data
+- [x] 50+ synthetic customer records
 - [ ] n8n as main orchestration layer
 - [ ] PDF/TXT knowledge-base upload with vector search / RAG
-- [ ] AI uses both structured data and uploaded knowledge
-- [ ] Saved coaching sessions / conversations
-- [ ] End-of-session summary or action plan
-- [ ] GitHub repository with complete source code
-- [ ] Automated CI checks on push / PR
-- [ ] Automated tests for business and AI workflow paths
+- [x] AI uses both structured data and uploaded knowledge
+- [x] Saved coaching sessions / conversations
+- [x] End-of-session summary or action plan
+- [x] GitHub repository with complete source code
+- [x] Automated CI checks on push / PR
+- [x] Automated tests for business and AI workflow paths
 - [ ] Deployment blocked when required checks fail
 
 ## Model choice
