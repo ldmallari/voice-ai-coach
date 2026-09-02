@@ -1,18 +1,10 @@
 import type OpenAI from 'openai';
 import { classifyQuestion, describePath } from './router';
 import { COACH_MODEL, llmClient } from './llm';
-import {
-  averageSatisfaction,
-  averageSpend,
-  conversionRate,
-  lapsedCustomers,
-  providerPerformance,
-  rebookingRate,
-  retentionRate,
-  totalRevenue,
-  treatmentPerformance,
-} from './metrics';
-import type { CustomerRecord, RetrievalPath } from './types';
+import { TOOLS, runTool, sourceForTool, type ToolContext } from './tools';
+import type { RetrievalPath } from './types';
+
+export type { KnowledgeHit, ToolContext } from './tools';
 
 /**
  * The coaching agent.
@@ -23,19 +15,8 @@ import type { CustomerRecord, RetrievalPath } from './types';
  * comes from a tool result computed in code, never from the model's own arithmetic.
  */
 
-export interface KnowledgeHit {
-  title: string;
-  content: string;
-  similarity: number;
-}
-
-/** Data the agent can reach. Injected so tests run without a database or network. */
-export interface CoachContext {
-  records: CustomerRecord[];
-  searchKnowledge: (query: string) => Promise<KnowledgeHit[]>;
-  /** Overridable for deterministic date maths in tests. */
-  now?: Date;
-}
+/** Data the agent can reach. Alias of the shared tool context. */
+export type CoachContext = ToolContext;
 
 export interface CoachAnswer {
   answer: string;
@@ -62,136 +43,6 @@ Rules:
 Weak answer: "There are many possible reasons your sales might be declining."
 Better: "Your consultation volume is healthy, but CoolSculpting conversion is well
 below your other treatments. Look at what happens during those consultations."`;
-
-const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
-  {
-    type: 'function',
-    function: {
-      name: 'get_clinic_overview',
-      description:
-        'Headline clinic metrics: conversion rate, rebooking rate, average spend, total revenue, average satisfaction and 90-day retention. Use for broad questions.',
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_treatment_performance',
-      description:
-        'Per-treatment conversion, rebooking, average spend and satisfaction, worst-converting first. Use when asking which treatment or service is underperforming.',
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_provider_performance',
-      description:
-        'Per-provider conversion and rebooking, weakest first. Use when asking who needs coaching or attention.',
-      parameters: { type: 'object', properties: {} },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'get_lapsed_customers',
-      description:
-        'Customers whose last visit is older than a given number of days. Use for follow-up and retention questions.',
-      parameters: {
-        type: 'object',
-        properties: {
-          days: {
-            type: 'number',
-            description: 'Days without a visit that counts as lapsed. Default 90.',
-          },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'search_clinic_knowledge',
-      description:
-        "Semantic search over the clinic's uploaded documents (policies, SOPs, pricing, scripts). Use when the answer should come from the clinic's own material.",
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'What to look for in the documents.' },
-        },
-        required: ['query'],
-      },
-    },
-  },
-];
-
-/** Runs one tool and returns a JSON-serialisable result. */
-async function runTool(
-  name: string,
-  input: Record<string, unknown>,
-  context: CoachContext,
-): Promise<unknown> {
-  const { records } = context;
-  const now = context.now ?? new Date();
-
-  switch (name) {
-    case 'get_clinic_overview':
-      return {
-        consultations: records.length,
-        conversionRate: conversionRate(records),
-        rebookingRate: rebookingRate(records),
-        averageSpend: averageSpend(records),
-        totalRevenue: totalRevenue(records),
-        averageSatisfaction: averageSatisfaction(records),
-        retentionRate90Day: retentionRate(records, 90, now),
-      };
-
-    case 'get_treatment_performance':
-      return treatmentPerformance(records);
-
-    case 'get_provider_performance':
-      return providerPerformance(records).map((row) => ({
-        provider: row.treatment,
-        consultations: row.consultations,
-        conversionRate: row.conversionRate,
-        rebookingRate: row.rebookingRate,
-        averageSpend: row.averageSpend,
-      }));
-
-    case 'get_lapsed_customers': {
-      const days = typeof input.days === 'number' ? input.days : 90;
-      const lapsed = lapsedCustomers(records, days, now);
-      return {
-        days,
-        count: lapsed.length,
-        // Cap the list; the count matters more than every name.
-        customers: lapsed.slice(0, 15).map((r) => ({
-          name: r.customerName,
-          treatment: r.treatment,
-          lastVisit: r.lastVisit,
-          spent: r.amountSpent,
-        })),
-      };
-    }
-
-    case 'search_clinic_knowledge': {
-      const hits = await context.searchKnowledge(String(input.query ?? ''));
-      return hits.length > 0
-        ? hits
-        : { note: 'No matching content in the uploaded documents.' };
-    }
-
-    default:
-      return { error: `Unknown tool: ${name}` };
-  }
-}
-
-/** Maps a tool name to the source label shown to the user. */
-function sourceForTool(name: string): string | null {
-  if (name === 'search_clinic_knowledge') return 'uploaded clinic documents';
-  if (name.startsWith('get_')) return 'clinic customer data';
-  return null;
-}
 
 /** Parses tool arguments defensively; a malformed blob must not kill the turn. */
 function parseArguments(raw: string | undefined): Record<string, unknown> {
