@@ -5,6 +5,8 @@ sources of truth: structured clinic/customer data and an uploaded clinic knowled
 
 Built for the V-Unite applicant challenge.
 
+See `HANDOFF.md` for build state, decisions and known gotchas.
+
 ## Stack
 
 | Layer | Choice |
