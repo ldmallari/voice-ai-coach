@@ -101,3 +101,19 @@ create table if not exists coaching_messages (
 
 create index if not exists coaching_messages_session_idx
   on coaching_messages (session_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- 4. Grants
+--
+-- Tables created through a direct Postgres connection (our db:schema script,
+-- which connects as `postgres`) do NOT inherit Supabase's automatic CRUD grants
+-- to the API roles: they land with only REFERENCES/TRIGGER/TRUNCATE, so every
+-- SELECT/INSERT reaching the tables through PostgREST or n8n's Supabase Vector
+-- Store node is denied with "permission denied for table". Grant the
+-- server-side service_role explicitly. anon and authenticated are deliberately
+-- left without data access — nothing here is meant to be reachable unauthenticated.
+-- ---------------------------------------------------------------------------
+grant usage on schema public to service_role;
+grant select, insert, update, delete on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to service_role;
+grant execute on function match_documents(vector, int, jsonb) to service_role;
