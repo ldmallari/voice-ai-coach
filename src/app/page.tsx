@@ -1,36 +1,29 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { chunksForSpeech } from '@/lib/speech';
 
 interface Turn {
   role: 'user' | 'assistant';
   content: string;
   sources?: string[];
 }
-
 interface ActionItem {
   action: string;
   why: string;
   priority: 'high' | 'medium' | 'low';
 }
-
 interface Plan {
   summary: string;
   actions: ActionItem[];
 }
 
 const SUGGESTIONS = [
-  'Why are some consultations not converting?',
   'Which treatment needs attention?',
+  'Why are some consultations not converting?',
   'Who has not returned recently?',
   'What does our cancellation policy say?',
 ];
-
-const PRIORITY_STYLE: Record<ActionItem['priority'], string> = {
-  high: 'bg-red-100 text-red-700',
-  medium: 'bg-amber-100 text-amber-700',
-  low: 'bg-neutral-200 text-neutral-600',
-};
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -43,47 +36,7 @@ type SpeechRecognitionLike = {
   stop: () => void;
 };
 
-/** Renders bold spans within a single line of the coach's markdown-ish text. */
-function renderInline(line: string) {
-  return line.split(/(\*\*[^*]+\*\*)/g).map((part, index) =>
-    part.startsWith('**') && part.endsWith('**') ? (
-      <strong key={index}>{part.slice(2, -2)}</strong>
-    ) : (
-      <span key={index}>{part}</span>
-    ),
-  );
-}
-
-/**
- * Lightweight renderer for the coach's answers: paragraphs, bullet lists and
- * bold. Answers come from our own model, and this builds React nodes (no raw
- * HTML), so there is no injection surface — and no markdown dependency to ship.
- */
-function RichText({ content }: { content: string }) {
-  const lines = content.split('\n');
-  return (
-    <div className="space-y-1.5">
-      {lines.map((line, index) => {
-        const trimmed = line.trim();
-        if (!trimmed) return null;
-        if (/^[-*]\s+/.test(trimmed)) {
-          return (
-            <div key={index} className="flex gap-2">
-              <span className="text-neutral-400">•</span>
-              <span>{renderInline(trimmed.replace(/^[-*]\s+/, ''))}</span>
-            </div>
-          );
-        }
-        return <p key={index}>{renderInline(trimmed)}</p>;
-      })}
-    </div>
-  );
-}
-
-/**
- * The browser's built-in speech recognition, when available. Preferred for voice
- * input because it is instant and free; Fish Audio ASR is the server fallback.
- */
+/** The browser's speech recognition, when available: instant, free, no Fish credit needed. */
 function getSpeechRecognition(): SpeechRecognitionLike | null {
   if (typeof window === 'undefined') return null;
   const w = window as unknown as {
@@ -93,6 +46,62 @@ function getSpeechRecognition(): SpeechRecognitionLike | null {
   const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
   return Ctor ? new Ctor() : null;
 }
+
+/** Renders bold and italic spans within one line of the coach's answer. */
+function renderInline(line: string) {
+  return line.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 2)
+      return <em key={i}>{part.slice(1, -1)}</em>;
+    return <span key={i}>{part}</span>;
+  });
+}
+
+/** Light renderer for the answer: paragraphs, bullets and bold. Our own model output, so no injection surface. */
+function RichText({ content }: { content: string }) {
+  return (
+    <div className="cx-answer">
+      {content.split('\n').map((line, i) => {
+        const t = line.trim();
+        if (!t) return null;
+        if (/^[-*]\s+/.test(t)) {
+          return (
+            <div key={i} className="cx-md-li">
+              <span className="b">•</span>
+              <span>{renderInline(t.replace(/^[-*]\s+/, ''))}</span>
+            </div>
+          );
+        }
+        return (
+          <p key={i} className="cx-md-p">
+            {renderInline(t)}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+const SpeakerOn = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M11 5 6 9H3v6h3l5 4z" />
+    <path d="M16 9a3.5 3.5 0 0 1 0 6" />
+    <path d="M19 6.5a7 7 0 0 1 0 11" />
+  </svg>
+);
+const SpeakerOff = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M11 5 6 9H3v6h3l5 4z" />
+    <path d="m17 9 5 5M22 9l-5 5" />
+  </svg>
+);
+const UploadIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 15V3" />
+    <path d="m7 8 5-5 5 5" />
+    <path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+  </svg>
+);
 
 export default function Home() {
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -111,23 +120,69 @@ export default function Home() {
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  const [overview, setOverview] = useState<{
+    conversion: number;
+    rebooking: number;
+    revenue: number;
+    retention90: number;
+  } | null>(null);
+  const [streaming, setStreaming] = useState(false);
+
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const revealRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const speakTokenRef = useRef<{ cancelled: boolean } | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [turns, plan]);
+  }, [turns, plan, pending]);
 
-  /** Lazily creates a session so every conversation is saved and can be summarised. */
+  useEffect(() => {
+    fetch('/api/overview')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setOverview(d))
+      .catch(() => undefined);
+    return () => {
+      if (revealRef.current) clearTimeout(revealRef.current);
+      if (speakTokenRef.current) speakTokenRef.current.cancelled = true;
+    };
+  }, []);
+
+  /** Fills an assistant turn word-by-word so answers feel alive rather than landing as a block. */
+  function revealAnswer(full: string, sources: string[]) {
+    if (revealRef.current) clearTimeout(revealRef.current);
+    setTurns((p) => [...p, { role: 'assistant', content: '', sources }]);
+    const parts = full.split(/(\s+)/);
+    let i = 0;
+    setStreaming(true);
+    const step = () => {
+      i = Math.min(i + 3, parts.length);
+      const partial = parts.slice(0, i).join('');
+      setTurns((p) => {
+        const copy = [...p];
+        const last = copy[copy.length - 1];
+        if (last && last.role === 'assistant') copy[copy.length - 1] = { ...last, content: partial };
+        return copy;
+      });
+      if (i < parts.length) {
+        revealRef.current = setTimeout(step, 16);
+      } else {
+        setStreaming(false);
+        revealRef.current = null;
+      }
+    };
+    step();
+  }
+
   async function ensureSession(): Promise<string | null> {
     if (sessionId) return sessionId;
     try {
-      const response = await fetch('/api/sessions', { method: 'POST' });
-      if (!response.ok) return null;
-      const data = await response.json();
+      const res = await fetch('/api/sessions', { method: 'POST' });
+      if (!res.ok) return null;
+      const data = await res.json();
       setSessionId(data.sessionId);
       return data.sessionId as string;
     } catch {
@@ -135,25 +190,76 @@ export default function Home() {
     }
   }
 
-  async function speak(text: string) {
+  /** Stops any in-progress speech and cancels its queue. */
+  function stopSpeaking() {
+    if (speakTokenRef.current) speakTokenRef.current.cancelled = true;
+    audioRef.current?.pause();
+    setSpeaking(false);
+  }
+
+  /** Synthesises one chunk; returns a playable object URL, or null on failure. */
+  async function fetchSpeech(text: string): Promise<string | null> {
     try {
-      setSpeaking(true);
-      const response = await fetch('/api/voice/speak', {
+      const res = await fetch('/api/voice/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
-      if (!response.ok) return;
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      if (audioRef.current) {
-        audioRef.current.src = url;
-        await audioRef.current.play().catch(() => undefined);
-      }
+      if (!res.ok) return null;
+      return URL.createObjectURL(await res.blob());
     } catch {
-      /* voice output is best-effort */
+      return null;
+    }
+  }
+
+  /** Plays one audio URL to completion (resolves on end, error, or an external pause). */
+  function playUrl(url: string): Promise<void> {
+    return new Promise((resolve) => {
+      const a = audioRef.current;
+      if (!a) {
+        resolve();
+        return;
+      }
+      const done = () => {
+        a.removeEventListener('ended', done);
+        a.removeEventListener('pause', done);
+        a.removeEventListener('error', done);
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      a.addEventListener('ended', done);
+      a.addEventListener('pause', done);
+      a.addEventListener('error', done);
+      a.src = url;
+      void a.play().catch(() => done());
+    });
+  }
+
+  /**
+   * Speaks the whole answer by synthesising and playing it chunk by chunk, so a
+   * long answer is read in full (a single long request would hit the timeout).
+   * One chunk is prefetched ahead so playback stays gapless.
+   */
+  async function speak(text: string) {
+    stopSpeaking();
+    const token = { cancelled: false };
+    speakTokenRef.current = token;
+
+    const chunks = chunksForSpeech(text);
+    if (chunks.length === 0) return;
+
+    setSpeaking(true);
+    try {
+      let next = fetchSpeech(chunks[0]);
+      for (let i = 0; i < chunks.length; i += 1) {
+        const url = await next;
+        if (token.cancelled) break;
+        next = i + 1 < chunks.length ? fetchSpeech(chunks[i + 1]) : Promise.resolve(null);
+        if (url) await playUrl(url);
+        if (token.cancelled) break;
+      }
     } finally {
-      setSpeaking(false);
+      if (speakTokenRef.current === token) setSpeaking(false);
     }
   }
 
@@ -161,36 +267,27 @@ export default function Home() {
     const trimmed = text.trim();
     if (!trimmed || pending) return;
 
+    stopSpeaking();
     const id = await ensureSession();
-    setTurns((previous) => [...previous, { role: 'user', content: trimmed }]);
+    setTurns((p) => [...p, { role: 'user', content: trimmed }]);
     setQuestion('');
     setPending(true);
 
     try {
-      const response = await fetch('/api/chat', {
+      const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: trimmed, sessionId: id ?? undefined }),
       });
-      const data = await response.json();
-
-      if (response.ok) {
-        setTurns((previous) => [
-          ...previous,
-          { role: 'assistant', content: data.answer, sources: data.sources },
-        ]);
+      const data = await res.json();
+      if (res.ok) {
+        revealAnswer(data.answer, data.sources ?? []);
         if (autoSpeak) void speak(data.answer);
       } else {
-        setTurns((previous) => [
-          ...previous,
-          { role: 'assistant', content: `Something went wrong: ${data.error}` },
-        ]);
+        setTurns((p) => [...p, { role: 'assistant', content: `Something went wrong: ${data.error}` }]);
       }
     } catch {
-      setTurns((previous) => [
-        ...previous,
-        { role: 'assistant', content: 'Could not reach the coach. Please try again.' },
-      ]);
+      setTurns((p) => [...p, { role: 'assistant', content: 'Could not reach the coach. Please try again.' }]);
     } finally {
       setPending(false);
     }
@@ -203,16 +300,15 @@ export default function Home() {
       return;
     }
 
-    // Primary: the browser's speech recognition — instant, and works without
-    // Fish Audio API credit. Falls back to Fish ASR when the browser lacks it.
+    stopSpeaking();
     const recognition = getSpeechRecognition();
     if (recognition) {
       recognition.lang = 'en-US';
       recognition.interimResults = false;
       recognition.maxAlternatives = 1;
       recognition.onresult = (event) => {
-        const transcript = event.results[0]?.[0]?.transcript ?? '';
-        if (transcript) void ask(transcript);
+        const t = event.results[0]?.[0]?.transcript ?? '';
+        if (t) void ask(t);
       };
       recognition.onerror = () => setRecording(false);
       recognition.onend = () => setRecording(false);
@@ -222,28 +318,28 @@ export default function Home() {
       return;
     }
 
+    // Fallback: record and send to the Fish Audio ASR endpoint.
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
       recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
+        stream.getTracks().forEach((t) => t.stop());
         setRecording(false);
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         if (blob.size === 0) return;
-
         setTranscribing(true);
         try {
           const form = new FormData();
           form.append('audio', blob, 'question.webm');
-          const response = await fetch('/api/voice/transcribe', { method: 'POST', body: form });
-          const data = await response.json();
-          if (response.ok && data.text) await ask(data.text);
+          const res = await fetch('/api/voice/transcribe', { method: 'POST', body: form });
+          const data = await res.json();
+          if (res.ok && data.text) await ask(data.text);
         } catch {
-          /* transcription is best-effort; the owner can type instead */
+          /* transcription is best-effort */
         } finally {
           setTranscribing(false);
         }
@@ -260,11 +356,11 @@ export default function Home() {
     if (!sessionId || ending) return;
     setEnding(true);
     try {
-      const response = await fetch(`/api/sessions/${sessionId}/end`, { method: 'POST' });
-      const data = await response.json();
-      if (response.ok) setPlan({ summary: data.summary, actions: data.actions ?? [] });
+      const res = await fetch(`/api/sessions/${sessionId}/end`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) setPlan({ summary: data.summary, actions: data.actions ?? [] });
     } catch {
-      /* keep the transcript; summary can be retried */
+      /* transcript is kept; summary can be retried */
     } finally {
       setEnding(false);
     }
@@ -276,11 +372,11 @@ export default function Home() {
     try {
       const form = new FormData();
       form.append('file', file);
-      const response = await fetch('/api/documents', { method: 'POST', body: form });
-      const data = await response.json();
+      const res = await fetch('/api/documents', { method: 'POST', body: form });
+      const data = await res.json();
       setUploadMsg(
-        response.ok
-          ? `Added “${data.title}” to the knowledge base (${data.characters.toLocaleString()} characters).`
+        res.ok
+          ? `Added “${data.title}” to the knowledge base.`
           : `Upload failed: ${data.error}`,
       );
     } catch {
@@ -290,162 +386,188 @@ export default function Home() {
     }
   }
 
+  const empty = turns.length === 0;
   const canEnd = turns.length > 0 && !plan;
+  const statusText = transcribing ? 'Transcribing…' : pending ? 'Coaching…' : speaking ? 'Speaking…' : null;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 px-5 py-10">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Voice AI Coach</h1>
-          <p className="mt-1 text-sm text-neutral-600">
-            Ask about your clinic by voice or text. Answers come from your customer
-            data and your own uploaded documents.
-          </p>
+    <div className="cx-page">
+      <header className="cx-head">
+        <div className="cx-brand">
+          <span className={`dot${pending || speaking ? ' pulsing' : ''}`} />
+          Voice AI Coach
         </div>
-        <label className="flex shrink-0 items-center gap-2 text-xs text-neutral-600">
-          <input
-            type="checkbox"
-            checked={autoSpeak}
-            onChange={(event) => setAutoSpeak(event.target.checked)}
-          />
-          Speak answers
-        </label>
-      </header>
-
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-white p-3">
-        <label className="cursor-pointer rounded-full bg-neutral-100 px-3 py-1.5 text-sm text-neutral-700 transition hover:bg-neutral-200">
-          {uploading ? 'Uploading…' : '+ Upload PDF / TXT'}
+        <span className="grow" />
+        <button
+          type="button"
+          className={`cx-ctrl${autoSpeak ? ' on' : ''}`}
+          role="switch"
+          aria-checked={autoSpeak}
+          onClick={() => setAutoSpeak((v) => !v)}
+        >
+          {autoSpeak ? <SpeakerOn /> : <SpeakerOff />}
+          <span className="lab">Speak answers</span>
+          <span className="cx-switch" aria-hidden="true">
+            <span className="knob" />
+          </span>
+        </button>
+        <label className={`cx-ctrl cx-ctrl--file${uploading ? ' busy' : ''}`}>
+          <UploadIcon />
+          <span className="lab">{uploading ? 'Uploading…' : 'Upload PDF / TXT'}</span>
           <input
             type="file"
             accept=".pdf,.txt,application/pdf,text/plain"
-            className="hidden"
             disabled={uploading}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void uploadDocument(file);
-              event.target.value = '';
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadDocument(f);
+              e.target.value = '';
             }}
           />
         </label>
-        {uploadMsg && <span className="text-xs text-neutral-500">{uploadMsg}</span>}
-      </div>
-
-      {turns.length === 0 && (
-        <div className="flex flex-wrap gap-2">
-          {SUGGESTIONS.map((suggestion) => (
-            <button
-              key={suggestion}
-              onClick={() => ask(suggestion)}
-              className="rounded-full border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-700 transition hover:border-neutral-500"
-            >
-              {suggestion}
-            </button>
-          ))}
+      </header>
+      {uploadMsg && (
+        <div className="cx-head" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <span className="cx-upmsg">{uploadMsg}</span>
         </div>
       )}
 
-      <div className="flex flex-1 flex-col gap-4">
-        {turns.map((turn, index) => (
-          <div
-            key={index}
-            className={
-              turn.role === 'user'
-                ? 'self-end rounded-2xl bg-neutral-900 px-4 py-2.5 text-sm text-white'
-                : 'rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-sm'
-            }
-          >
-            {turn.role === 'assistant' ? (
-              <RichText content={turn.content} />
-            ) : (
-              <p className="whitespace-pre-wrap">{turn.content}</p>
+      <main className="cx-main">
+        {empty ? (
+          <div className="cx-hero">
+            <div className="cx-orb-wrap">
+              <span className="cx-orb-glow" />
+              <button className="cx-orb" onClick={toggleRecording} aria-label="Hold to talk" />
+            </div>
+            <div className="cx-eyebrow">Your clinic coach</div>
+            <h1 className="cx-hero-title">Ask your clinic anything.</h1>
+            <p className="cx-hero-sub">
+              By voice or text — answers come from your customer data and your own uploaded documents.
+            </p>
+            {overview && (
+              <div className="cx-kpis" aria-label="Clinic overview">
+                <div className="cx-kpi">
+                  <span className="v">{Math.round(overview.conversion * 100)}%</span>
+                  <span className="l">Conversion</span>
+                </div>
+                <div className="cx-kpi">
+                  <span className="v">{Math.round(overview.rebooking * 100)}%</span>
+                  <span className="l">Rebooking</span>
+                </div>
+                <div className="cx-kpi">
+                  <span className="v">${Math.round(overview.revenue / 1000)}k</span>
+                  <span className="l">Revenue</span>
+                </div>
+                <div className="cx-kpi">
+                  <span className="v">{Math.round(overview.retention90 * 100)}%</span>
+                  <span className="l">Retention</span>
+                </div>
+              </div>
             )}
-            {turn.sources && turn.sources.length > 0 && (
-              <p className="mt-2 text-xs text-neutral-500">
-                Source: {turn.sources.join(' and ')}
-              </p>
-            )}
-          </div>
-        ))}
-
-        {(pending || transcribing || speaking) && (
-          <p className="text-sm text-neutral-500" aria-live="polite">
-            {transcribing
-              ? 'Transcribing your question…'
-              : pending
-                ? 'Checking your clinic data…'
-                : 'Speaking…'}
-          </p>
-        )}
-
-        {plan && (
-          <section className="rounded-2xl border border-neutral-900/10 bg-neutral-50 p-4">
-            <h2 className="text-sm font-semibold text-neutral-900">Session action plan</h2>
-            <p className="mt-1 text-sm text-neutral-700">{plan.summary}</p>
-            <ol className="mt-3 space-y-2">
-              {plan.actions.map((item, index) => (
-                <li key={index} className="rounded-lg border border-neutral-200 bg-white p-3 text-sm">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-neutral-900">{item.action}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_STYLE[item.priority]}`}>
-                      {item.priority}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-neutral-500">{item.why}</p>
-                </li>
+            <div className="cx-chips">
+              {SUGGESTIONS.map((s) => (
+                <button key={s} className="cx-chip" onClick={() => ask(s)}>
+                  {s}
+                </button>
               ))}
-            </ol>
-          </section>
-        )}
+            </div>
+          </div>
+        ) : (
+          <div className="cx-thread">
+            {turns.map((turn, i) =>
+              turn.role === 'user' ? (
+                <div key={i} className="cx-turn user">
+                  {turn.content}
+                </div>
+              ) : (
+                <div key={i} className="cx-turn assistant">
+                  <div className="who">
+                    <span className="dot" />
+                    <span>Coach</span>
+                  </div>
+                  <RichText content={turn.content} />
+                  {i === turns.length - 1 && streaming && <span className="cx-caret" aria-hidden />}
+                  {turn.sources &&
+                    turn.sources.length > 0 &&
+                    !(i === turns.length - 1 && streaming) && (
+                      <span className="cx-src">
+                        <span className="d" />
+                        {turn.sources.join(' · ')}
+                      </span>
+                    )}
+                </div>
+              ),
+            )}
 
-        <div ref={bottomRef} />
+            {statusText && (
+              <div className="cx-status" aria-live="polite">
+                <span className="dots">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                {statusText}
+              </div>
+            )}
+
+            {plan && (
+              <section className="cx-plan">
+                <h2>Session action plan</h2>
+                <p className="sum">{plan.summary}</p>
+                <ol>
+                  {plan.actions.map((a, i) => (
+                    <li key={i}>
+                      <div className="top">
+                        <span className="act">{a.action}</span>
+                        <span className={`cx-pri ${a.priority}`}>{a.priority}</span>
+                      </div>
+                      <div className="why">{a.why}</div>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+
+            {canEnd && (
+              <button className="cx-endbtn" onClick={endSession} disabled={ending}>
+                {ending ? 'Summarising…' : 'End session & get action plan'}
+              </button>
+            )}
+
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </main>
+
+      <div className="cx-dock">
+        <form
+          className={`cx-composer${recording ? ' listening' : ''}`}
+          onSubmit={(e) => {
+            e.preventDefault();
+            ask(question);
+          }}
+        >
+          <button type="button" className="cx-omic" onClick={toggleRecording} aria-label="Hold to talk" />
+          <input
+            className="cx-field"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Type a message, or tap the orb to speak…"
+            aria-label="Ask your coach a question"
+          />
+          <span className="cx-voicing">
+            <span className="cx-wave">
+              <i /><i /><i /><i /><i /><i /><i /><i /><i /><i />
+            </span>
+            <span className="cx-lbl">Listening…</span>
+          </span>
+          <button type="submit" className="cx-send" disabled={pending || question.trim().length === 0}>
+            Ask
+          </button>
+        </form>
       </div>
 
-      {canEnd && (
-        <button
-          onClick={endSession}
-          disabled={ending}
-          className="self-start text-xs font-medium text-neutral-500 underline underline-offset-4 disabled:opacity-40"
-        >
-          {ending ? 'Summarising…' : 'End session & get action plan'}
-        </button>
-      )}
-
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          ask(question);
-        }}
-        className="sticky bottom-4 flex gap-2"
-      >
-        <button
-          type="button"
-          onClick={toggleRecording}
-          aria-label={recording ? 'Stop recording' : 'Ask by voice'}
-          className={`grid h-11 w-11 shrink-0 place-items-center rounded-full border text-lg transition ${
-            recording
-              ? 'animate-pulse border-red-500 bg-red-500 text-white'
-              : 'border-neutral-300 bg-white text-neutral-700 hover:border-neutral-500'
-          }`}
-        >
-          {recording ? '■' : '🎙'}
-        </button>
-        <input
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          placeholder={recording ? 'Listening…' : 'Ask your coach a question'}
-          aria-label="Ask your coach a question"
-          className="flex-1 rounded-full border border-neutral-300 bg-white px-4 py-2.5 text-sm outline-none focus:border-neutral-900"
-        />
-        <button
-          type="submit"
-          disabled={pending || question.trim().length === 0}
-          className="rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-40"
-        >
-          Ask
-        </button>
-      </form>
-
-      <audio ref={audioRef} className="hidden" />
-    </main>
+      <audio ref={audioRef} hidden />
+    </div>
   );
 }
