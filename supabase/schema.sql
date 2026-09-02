@@ -32,28 +32,51 @@ create index if not exists customers_last_visit_idx on customers (last_visit des
 
 -- ---------------------------------------------------------------------------
 -- 2. Clinic knowledge base (PDF / TXT uploads)
+--
+-- Shaped to LangChain's Supabase convention so n8n's Supabase Vector Store node
+-- can insert and query it directly, rather than needing a bespoke adapter.
+-- 384 dimensions matches sentence-transformers/all-MiniLM-L6-v2, served free
+-- through Hugging Face Inference.
 -- ---------------------------------------------------------------------------
 create table if not exists documents (
-  id          uuid primary key default gen_random_uuid(),
-  title       text        not null,
-  source_type text        not null check (source_type in ('pdf','txt')),
-  byte_size   integer     not null,
-  uploaded_at timestamptz not null default now()
-);
-
-create table if not exists document_chunks (
-  id          bigserial primary key,
-  document_id uuid    not null references documents (id) on delete cascade,
-  chunk_index integer not null,
-  content     text    not null,
-  -- 1536 dims matches text-embedding-3-small.
-  embedding   vector(1536),
-  unique (document_id, chunk_index)
+  id        bigserial primary key,
+  content   text,
+  metadata  jsonb,
+  embedding vector(384)
 );
 
 -- Approximate nearest neighbour over cosine distance.
-create index if not exists document_chunks_embedding_idx
-  on document_chunks using ivfflat (embedding vector_cosine_ops) with (lists = 100);
+create index if not exists documents_embedding_idx
+  on documents using ivfflat (embedding vector_cosine_ops) with (lists = 100);
+
+-- Signature required by the LangChain / n8n Supabase vector store integration.
+create or replace function match_documents (
+  query_embedding vector(384),
+  match_count     int default 5,
+  filter          jsonb default '{}'
+)
+returns table (
+  id         bigint,
+  content    text,
+  metadata   jsonb,
+  similarity float
+)
+language plpgsql stable
+as $$
+begin
+  return query
+  select
+    d.id,
+    d.content,
+    d.metadata,
+    1 - (d.embedding <=> query_embedding) as similarity
+  from documents d
+  where d.metadata @> filter
+    and d.embedding is not null
+  order by d.embedding <=> query_embedding
+  limit match_count;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- 3. Coaching sessions

@@ -2,8 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { coach } from '@/lib/agent';
 import { loadRecords } from '@/lib/records';
-import { searchKnowledge } from '@/lib/knowledge';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { isKnowledgeConfigured, searchKnowledge } from '@/lib/knowledge';
 import { isLlmConfigured } from '@/lib/llm';
 
 const RequestSchema = z.object({
@@ -34,7 +33,7 @@ export async function POST(request: Request) {
       // Knowledge search needs both Supabase and an embedding key; degrade to an
       // empty result rather than failing the whole request.
       searchKnowledge: async (query) => {
-        if (!isSupabaseConfigured() || !process.env.OPENAI_API_KEY) return [];
+        if (!isKnowledgeConfigured()) return [];
         return searchKnowledge(query);
       },
     });

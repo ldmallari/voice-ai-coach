@@ -13,7 +13,7 @@ Built for the V-Unite applicant challenge.
 | Database + vectors | Supabase (Postgres + pgvector) |
 | Orchestration | n8n (main backend / orchestration layer) |
 | Voice in/out | Fish Audio |
-| Embeddings | See note below — DeepSeek has no embeddings endpoint |
+| Embeddings | Hugging Face Inference `all-MiniLM-L6-v2` (384d), called from n8n |
 | LLM | DeepSeek `deepseek-v4-flash` (OpenAI-compatible, tool calling) |
 | CI | GitHub Actions |
 
@@ -55,8 +55,19 @@ rather than generic advice.
 tool-calling turn: flash 0.86s, pro 1.59s, both returning correct tool calls. Flash was
 chosen for perceived latency; override with `DEEPSEEK_MODEL`.
 
-DeepSeek exposes no embeddings endpoint (`/embeddings` returns 404), so RAG embeddings
-come from a separate provider — see `EMBEDDINGS_PROVIDER` in `.env.example`.
+DeepSeek exposes no embeddings endpoint (`/embeddings` returns 404 on both `/embeddings`
+and `/v1/embeddings`), so embeddings come from Hugging Face Inference, called inside n8n.
+Using more than one AI provider is a listed bonus in the challenge brief.
+
+## Why n8n owns retrieval
+
+The brief requires n8n to be the main orchestration layer, so retrieval genuinely runs
+there rather than being decorative: n8n embeds via Hugging Face Inference and reads and
+writes a Supabase Vector Store. The knowledge tables therefore follow LangChain's
+Supabase convention (`documents` + `match_documents`) so the n8n node works natively.
+
+Exact figures stay in application code and are exposed to n8n as HTTP tools. Vectors are
+for meaning; arithmetic is never left to a language model.
 
 ## Local setup
 

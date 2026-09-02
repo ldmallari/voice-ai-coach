@@ -1,24 +1,13 @@
-import OpenAI from 'openai';
-import { serverClient } from './supabase';
 import type { KnowledgeHit } from './agent';
 
 /**
  * Retrieval over the clinic's uploaded documents.
  *
- * Embeddings come from OpenAI (1536 dims, matching the pgvector column) and the
- * nearest-neighbour search runs in Postgres via the match_document_chunks RPC.
+ * Embedding and vector search live in n8n (Hugging Face Inference embeddings into a
+ * Supabase Vector Store), because the challenge requires n8n to be the main
+ * orchestration layer. This module is the thin client that calls it, so the app
+ * never needs an embedding key of its own.
  */
-
-const EMBEDDING_MODEL = 'text-embedding-3-small';
-
-export async function embed(text: string): Promise<number[]> {
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY ?? '' });
-  const response = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: text,
-  });
-  return response.data[0].embedding;
-}
 
 /** Splits document text into overlapping chunks so context isn't cut mid-sentence. */
 export function chunkText(text: string, chunkSize = 1000, overlap = 150): string[] {
@@ -36,16 +25,45 @@ export function chunkText(text: string, chunkSize = 1000, overlap = 150): string
   return chunks;
 }
 
-/** Semantic search used as the agent's knowledge tool. */
+export function isKnowledgeConfigured(): boolean {
+  return Boolean(process.env.N8N_RETRIEVAL_URL);
+}
+
+/**
+ * Asks n8n for passages relevant to a question.
+ * Returns an empty list rather than throwing when retrieval is unavailable, so a
+ * data-only question still gets answered.
+ */
 export async function searchKnowledge(query: string): Promise<KnowledgeHit[]> {
-  const embedding = await embed(query);
-  const { data, error } = await serverClient().rpc('match_document_chunks', {
-    query_embedding: embedding,
-    match_count: 5,
-    min_similarity: 0.2,
-  });
+  const url = process.env.N8N_RETRIEVAL_URL;
+  if (!url) return [];
 
-  if (error) throw new Error(`Knowledge search failed: ${error.message}`);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.N8N_WEBHOOK_SECRET
+          ? { 'X-Coach-Secret': process.env.N8N_WEBHOOK_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({ query }),
+      // Retrieval must not hold a conversation hostage.
+      signal: AbortSignal.timeout(8000),
+    });
 
-  return (data ?? []) as KnowledgeHit[];
+    if (!response.ok) {
+      console.error('[knowledge] retrieval failed:', response.status);
+      return [];
+    }
+
+    const data = (await response.json()) as { matches?: KnowledgeHit[] };
+    return data.matches ?? [];
+  } catch (error) {
+    console.error(
+      '[knowledge] retrieval error:',
+      error instanceof Error ? error.message : error,
+    );
+    return [];
+  }
 }
