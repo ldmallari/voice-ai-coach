@@ -8,7 +8,12 @@ import OpenAI from 'openai';
  * swapping provider later is a base URL and a model name, not a rewrite.
  */
 
-export const COACH_MODEL = 'deepseek-chat';
+/**
+ * Explicitly listed by the account's /models endpoint. `deepseek-chat` also works
+ * but is an unlisted alias, so it is avoided here. Flash answers in roughly half
+ * the time of pro on tool-calling turns, which matters for perceived latency.
+ */
+export const COACH_MODEL = process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash';
 
 export function llmClient(): OpenAI {
   const apiKey = process.env.DEEPSEEK_API_KEY;

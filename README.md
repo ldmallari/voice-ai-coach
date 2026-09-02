@@ -14,7 +14,7 @@ Built for the V-Unite applicant challenge.
 | Orchestration | n8n (main backend / orchestration layer) |
 | Voice in/out | Fish Audio |
 | Embeddings | See note below — DeepSeek has no embeddings endpoint |
-| LLM | DeepSeek (`deepseek-chat`, OpenAI-compatible, tool calling) |
+| LLM | DeepSeek `deepseek-v4-flash` (OpenAI-compatible, tool calling) |
 | CI | GitHub Actions |
 
 ## Architecture
@@ -48,6 +48,15 @@ rather than generic advice.
 - [ ] Automated CI checks on push / PR
 - [ ] Automated tests for business and AI workflow paths
 - [ ] Deployment blocked when required checks fail
+
+## Model choice
+
+`deepseek-v4-flash`, verified against the account's `/models` endpoint. Measured on a
+tool-calling turn: flash 0.86s, pro 1.59s, both returning correct tool calls. Flash was
+chosen for perceived latency; override with `DEEPSEEK_MODEL`.
+
+DeepSeek exposes no embeddings endpoint (`/embeddings` returns 404), so RAG embeddings
+come from a separate provider — see `EMBEDDINGS_PROVIDER` in `.env.example`.
 
 ## Local setup
 
