@@ -9,3 +9,6 @@ build/
 *.log
 .DS_Store
 coverage/
+
+# Carries an n8n bearer token
+.mcp.json
