@@ -47,7 +47,40 @@ Never commit these. `.env.local` and `.mcp.json` are gitignored.
   root, so **start Claude Code from this directory** or it will not connect
 - All of these are exposed in the previous chat transcript. Rotate after submission
 
-## Done
+## Status — updated 2 Sep (mvp branch, PR #1)
+
+95 tests passing, CI green on the PR. Work continues on the `mvp` branch; `main`
+is the production line and the merge is the deploy gate.
+
+### Deployed to n8n (Railway `n8n-coach`), all active
+
+| Workflow | ID | Webhook | Verified |
+|---|---|---|---|
+| Knowledge Ingest | `8K5CuLYnrtpdg7YY` | `/webhook/coach-ingest` | ✅ live |
+| Knowledge Retrieval | `PYTsapmIGNDP4wDo` | `/webhook/coach-retrieve` | ✅ live |
+| Main Orchestration (DeepSeek agent) | `jb1YGfVUXUQwZ5re` | `/webhook/coach-chat` | ✅ knowledge path live; metrics HTTP tool awaits the Vercel URL |
+
+Credentials wired: Cohere (`uxtOtEIzqzq68DNt`), DeepSeek (`7lhVEg2d90IJdEYp`),
+Supabase (`fQiSXhORB0qR3ugh`). The Supabase credential must use the **service-role**
+key (host `https://zxjbxogadvincdzpshst.supabase.co`).
+
+### Built this session
+- `POST /api/documents` — PDF/TXT upload → text extract (unpdf) → n8n ingest
+- `POST /api/voice/transcribe` + `/api/voice/speak` — Fish Audio ASR + TTS
+- UI: voice mic (browser SpeechRecognition primary, Fish ASR fallback), spoken
+  answers (Fish TTS), document upload, saved sessions, end-of-session action plan
+- `src/lib/orchestrator.ts` + `/api/chat` — route through the n8n agent when
+  `N8N_COACH_URL` is set, in-process agent as fallback
+- `vercel.json` — build runs lint+typecheck+test before build (deploy gate)
+- `schema.sql` — explicit `service_role` grants (see gotchas)
+
+### The two live external constraints
+- **Fish Audio API credit is $0.** TTS works on the free `s2.1-pro-free` model;
+  ASR (voice input) needs paid credit. Browser SpeechRecognition covers voice
+  input meanwhile. Top up at https://fish.audio/app/developers to use Fish ASR.
+- **Vercel not deployed.** See Remaining.
+
+## Earlier work
 
 62 tests passing, 0 npm vulnerabilities, CI green on every push.
 
@@ -72,15 +105,22 @@ Never commit these. `.env.local` and `.mcp.json` are gitignored.
 
 ## Remaining, in priority order
 
-1. **Deploy the two n8n workflows** to the Railway instance (`n8n-coach` MCP). Add the
-   Supabase credential in n8n and link both credentials to the nodes
-2. **Vercel deploy** — also gives n8n a public URL for `/api/tools`
-3. **Document upload** — `POST /api/documents`, PDF/TXT parse, forward to n8n ingest
-4. **Main chat orchestration in n8n** — webhook → AI Agent → tools (`/api/tools` over
-   HTTP, plus the vector store as a retrieve-as-tool). This is what makes n8n genuinely
-   the orchestration layer rather than decoration
-5. **Voice** — Fish Audio in and out. Only 8%, do it last
-6. **Deploy gate** — block deployment when CI checks fail
+1. **Vercel deploy** — connect the GitHub repo (Production branch = `main`; the
+   `mvp` branch gets Preview deploys). Set env vars from `.env.local`
+   (DEEPSEEK_*, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, COHERE_API_KEY,
+   COACH_TOOL_SECRET, FISH_AUDIO_API_KEY, N8N_RETRIEVAL_URL, N8N_INGEST_URL).
+2. **After Vercel is live** (Claude does these):
+   - Update the Main Orchestration "Clinic Metrics" tool URL from the placeholder
+     `https://voice-ai-coach.vercel.app/api/tools` to the real deployment URL.
+   - Set `N8N_COACH_URL=…/webhook/coach-chat` in Vercel env so n8n becomes the
+     primary path, then test the metrics path through n8n end-to-end.
+3. **Fish Audio API credit** — top up to enable server-side Fish ASR (voice input
+   currently works via the browser).
+4. **Branch protection on `main`** — require the CI check before merge (the second
+   half of the deploy gate).
+
+Done: n8n workflows deployed + active, document upload, voice I/O, saved sessions
+and action plan, n8n main orchestration, CI + deploy gate.
 
 ## Gotchas already hit
 
@@ -95,6 +135,17 @@ Never commit these. `.env.local` and `.mcp.json` are gitignored.
 - An earlier workflow was accidentally created on the **company** n8n
   (`workflow.backroomop.com`) and has been archived. Build only against `n8n-coach`
 - `service_role` bypasses RLS. Server-side only
+- **Tables created via the direct `DATABASE_URL` connection do not inherit
+  Supabase's automatic CRUD grants** to `service_role`/`anon`/`authenticated` —
+  they land with only `REFERENCES/TRIGGER/TRUNCATE`, so every service-key
+  SELECT/INSERT (app reads and the n8n vector store) returns `permission denied
+  for table … 403`. `schema.sql` now grants `service_role` explicitly; re-run
+  `npm run db:schema` after any fresh project
+- **Fish Audio ASR needs paid API credit** (separate from platform credit); TTS
+  runs on the free `s2.1-pro-free` model. Browser SpeechRecognition is the voice-
+  input fallback so the demo works at $0 credit
+- The n8n Cohere/DeepSeek/Supabase credentials are reused by ID in the deployed
+  workflows; the app's `.mcp.json` bearer token reaches the same n8n instance
 
 ## Commands
 
