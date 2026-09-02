@@ -77,10 +77,32 @@ for meaning; arithmetic is never left to a language model.
 ## Local setup
 
 ```
-cp .env.example .env
+cp .env.example .env.local     # then fill in the values
 npm install
+npm run db:schema              # apply supabase/schema.sql
+npm run db:seed                # 60 deterministic customer records
+npm run db:verify              # sanity-check schema, data and the vector RPC
 npm run dev
 ```
+
+`db:schema` is idempotent and `db:seed` upserts, so both are safe to re-run.
+
+## Verified state
+
+Checked against the live database:
+
+| Check | Result |
+|---|---|
+| pgvector | 0.8.2 |
+| Customer records | 60 |
+| Overall conversion | 51.7% |
+| Worst-converting treatment | CoolSculpting, 7.1% over 14 consultations |
+| Worst-converting provider | Nurse Kahu, 29.4% |
+| `documents.embedding` dimensions | 1024, matching Cohere `embed-english-v3.0` |
+| Integrity constraints | 5, including spend and rebooking only against a purchase |
+
+Cohere verified independently: `embed-english-v3.0` with `input_type: search_document`
+returns 1024 floats.
 
 ## Testing
 

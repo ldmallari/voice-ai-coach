@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed": "tsx scripts/seed.ts"
+    "db:schema": "node scripts/apply-schema.mjs",
+    "db:seed": "tsx scripts/seed.mjs",
+    "db:verify": "tsx scripts/verify.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
@@ -22,11 +24,13 @@
   },
   "devDependencies": {
     "@types/node": "^22.7.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.4",
+    "pg": "^8.23.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "tsx": "^4.19.1",

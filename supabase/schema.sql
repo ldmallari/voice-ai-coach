@@ -101,30 +101,3 @@ create table if not exists coaching_messages (
 
 create index if not exists coaching_messages_session_idx
   on coaching_messages (session_id, created_at);
-
--- ---------------------------------------------------------------------------
--- 4. Vector search RPC
--- ---------------------------------------------------------------------------
-create or replace function match_document_chunks (
-  query_embedding vector(1536),
-  match_count     int default 5,
-  min_similarity  float default 0.2
-)
-returns table (
-  content    text,
-  title      text,
-  similarity float
-)
-language sql stable
-as $$
-  select
-    dc.content,
-    d.title,
-    1 - (dc.embedding <=> query_embedding) as similarity
-  from document_chunks dc
-  join documents d on d.id = dc.document_id
-  where dc.embedding is not null
-    and 1 - (dc.embedding <=> query_embedding) > min_similarity
-  order by dc.embedding <=> query_embedding
-  limit match_count;
-$$;
