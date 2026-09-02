@@ -12,3 +12,8 @@ coverage/
 
 # Carries an n8n bearer token
 .mcp.json
+
+# Build caches and Next-generated agent rule files
+tsconfig.tsbuildinfo
+/AGENTS.md
+/CLAUDE.md
