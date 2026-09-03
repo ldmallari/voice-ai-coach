@@ -5,7 +5,7 @@ Railway instance (`primary-production-c0ce.up.railway.app`), all active.
 
 | Workflow | ID | Webhook | Purpose |
 |---|---|---|---|
-| Main Orchestration | `0EVPI3YIuG4dom3b` | `POST /webhook/coach-chat` | DeepSeek **AI Agent** that answers a coaching turn. Tools: **Clinic Metrics** (HTTP → the app's `/api/tools`) and **Clinic Knowledge** (native Supabase vector retrieve-as-tool). Session memory keyed by `sessionId`. |
+| Main Orchestration | `0EVPI3YIuG4dom3b` | `POST /webhook/coach-chat` | DeepSeek **AI Agent** that answers a coaching turn. Tools: **Clinic Metrics** (HTTP → the app's `/api/tools`; the agent picks the tool name via `$fromAI` — `get_clinic_report` for the whole picture, or the narrower `get_clinic_overview` / `_treatment_` / `_provider_` / `_lapsed_`) and **Clinic Knowledge** (native Supabase vector retrieve-as-tool). Session memory keyed by `sessionId`. Runs with `returnIntermediateSteps` and returns `{answer, sources}` so the app can show source chips. |
 | Knowledge Ingest | `8K5CuLYnrtpdg7YY` | `POST /webhook/coach-ingest` | Chunk → Cohere embed → upsert into the Supabase `documents` vector store. |
 | Knowledge Retrieval | `PYTsapmIGNDP4wDo` | `POST /webhook/coach-retrieve` | Cohere embed → similarity search → `{matches:[{title,content,similarity}]}`. |
 
@@ -42,6 +42,14 @@ explicit `service_role` grants (see `supabase/schema.sql`) or inserts return
 - The agent's HTTP tool uses the base `n8n-nodes-base.httpRequestTool`. The
   langchain `toolHttpRequest` node errored at runtime on this instance
   (`supplyData method but no execute method`).
+- **`maxIterations` is 8, and broad questions use `get_clinic_report`.** The agent
+  used to hit "Max iterations (6) reached" by calling four metric tools serially;
+  the one-call report keeps broad questions within budget. A new metric tool must
+  ship in the app's `/api/tools` **before** it's referenced here, or the agent's
+  calls 400 and loop until they run out of iterations.
+- The Return Answer node derives `sources` from the agent's intermediate steps
+  (metrics tool → `clinic customer data`, knowledge tool → `uploaded clinic
+  documents`), wrapped in try/catch so a shape change never drops the answer.
 
 ## The `*.workflow.ts` files
 
