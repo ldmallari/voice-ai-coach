@@ -38,9 +38,26 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_clinic_report',
+      description:
+        "The whole clinic data picture in ONE call: headline overview, per-treatment and per-provider performance, and lapsed customers. Prefer this for broad, multi-part, or 'top priorities / where should I focus / what needs attention' questions so you do not need several separate calls. Use the narrower tools only when a single specific metric is enough.",
+      parameters: {
+        type: 'object',
+        properties: {
+          days: {
+            type: 'number',
+            description: 'Days without a visit that counts as lapsed, for the lapsed section. Default 90.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_clinic_overview',
       description:
-        'Headline clinic metrics: conversion rate, rebooking rate, average spend, total revenue, average satisfaction and 90-day retention. Use for broad questions.',
+        'Headline clinic metrics only: conversion rate, rebooking rate, average spend, total revenue, average satisfaction and 90-day retention. Use for a single broad metric; for the full picture prefer get_clinic_report.',
       parameters: { type: 'object', properties: {} },
     },
   },
@@ -106,6 +123,18 @@ export async function runTool(
   const now = context.now ?? new Date();
 
   switch (name) {
+    case 'get_clinic_report': {
+      // Composes the four data tools by calling them, so every figure is
+      // byte-identical to the granular tools — one round-trip, same numbers.
+      const days = typeof input.days === 'number' ? input.days : 90;
+      return {
+        overview: await runTool('get_clinic_overview', {}, context),
+        treatments: await runTool('get_treatment_performance', {}, context),
+        providers: await runTool('get_provider_performance', {}, context),
+        lapsed: await runTool('get_lapsed_customers', { days }, context),
+      };
+    }
+
     case 'get_clinic_overview':
       return {
         consultations: records.length,
