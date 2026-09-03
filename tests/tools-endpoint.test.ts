@@ -89,6 +89,20 @@ describe('POST /api/tools', () => {
     expect(body.result.conversionRate).toBeGreaterThan(0);
   });
 
+  it('returns the whole clinic report in a single call', async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(requestFor({ tool: 'get_clinic_report' }, SECRET));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.tool).toBe('get_clinic_report');
+    // One call, all four data sections — so the agent needs no follow-up round-trips.
+    expect(body.result.overview.consultations).toBe(60);
+    expect(Array.isArray(body.result.treatments)).toBe(true);
+    expect(Array.isArray(body.result.providers)).toBe(true);
+    expect(body.result.lapsed).toHaveProperty('count');
+  });
+
   it('passes tool input through', async () => {
     const { POST } = await loadRoute();
     const response = await POST(
