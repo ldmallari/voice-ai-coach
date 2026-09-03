@@ -62,11 +62,20 @@ test('a suggestion chip also produces an answer', async ({ page }) => {
   await expect(page.getByText(/CoolSculpting is the one to fix/i)).toBeVisible();
 });
 
-test('uploading a document confirms it was added to the knowledge base', async ({ page }) => {
-  await page.route('**/api/documents', (route) =>
-    route.fulfill({ json: { ok: true, title: 'Clinic Policies', characters: 240 } }),
-  );
+test('unlocking the knowledge panel lets you upload a document', async ({ page }) => {
+  // The whole knowledge base is gated: unlock, then the upload zone appears.
+  await page.route('**/api/documents', (route) => {
+    const method = route.request().method();
+    if (method === 'GET') return route.fulfill({ json: { documents: [] } });
+    if (method === 'POST')
+      return route.fulfill({ json: { ok: true, title: 'Clinic Policies', characters: 240 } });
+    return route.continue();
+  });
   await page.goto('/');
+
+  await page.getByRole('button', { name: /Knowledge base/i }).click();
+  await page.getByPlaceholder('Admin passcode').fill('022304');
+  await page.getByRole('button', { name: 'Unlock' }).click();
 
   await page.locator('input[type="file"]').setInputFiles({
     name: 'policies.txt',
@@ -75,4 +84,74 @@ test('uploading a document confirms it was added to the knowledge base', async (
   });
 
   await expect(page.getByText(/Added .*Clinic Policies.* to the knowledge base/i)).toBeVisible();
+});
+
+test('the knowledge panel unlocks with the passcode and deletes a document', async ({ page }) => {
+  // Trailing ** so the DELETE ?title= request is stubbed, not sent to the real server.
+  await page.route('**/api/documents**', (route) => {
+    const method = route.request().method();
+    if (method === 'GET') {
+      return route.fulfill({
+        json: {
+          documents: [
+            { title: 'Cancellation Policy', chunks: 2, uploadedAt: '2026-09-01T00:00:00Z' },
+            { title: 'Pricing', chunks: 1, uploadedAt: '2026-09-02T00:00:00Z' },
+          ],
+        },
+      });
+    }
+    if (method === 'DELETE') return route.fulfill({ json: { ok: true, title: 'Pricing', removed: 1 } });
+    return route.continue();
+  });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: /Knowledge base/i }).click();
+  await page.getByPlaceholder('Admin passcode').fill('022304');
+  await page.getByRole('button', { name: 'Unlock' }).click();
+
+  await expect(page.getByRole('button', { name: 'View Cancellation Policy' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'View Pricing' })).toBeVisible();
+
+  // Delete is a two-step confirm: the trash icon reveals a Delete/Cancel prompt.
+  await page.getByRole('button', { name: 'Delete Pricing' }).click();
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'View Pricing' })).toHaveCount(0);
+});
+
+test('unlocking the knowledge panel lets you read a document', async ({ page }) => {
+  // Match with a trailing ** so the ?title= read request is stubbed, not just the bare list.
+  await page.route('**/api/documents**', (route) => {
+    const method = route.request().method();
+    const url = new URL(route.request().url());
+    if (method === 'GET' && url.searchParams.get('title')) {
+      return route.fulfill({
+        json: {
+          title: 'Cancellation Policy',
+          chunks: 1,
+          content: 'Late cancellations are charged a 50% fee.',
+        },
+      });
+    }
+    if (method === 'GET') {
+      return route.fulfill({
+        json: {
+          documents: [{ title: 'Cancellation Policy', chunks: 1, uploadedAt: '2026-09-01T00:00:00Z' }],
+        },
+      });
+    }
+    return route.continue();
+  });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: /Knowledge base/i }).click();
+  await page.getByPlaceholder('Admin passcode').fill('022304');
+  await page.getByRole('button', { name: 'Unlock' }).click();
+
+  // Click the document to open it and read the ingested text.
+  await page.getByRole('button', { name: 'View Cancellation Policy' }).click();
+  await expect(page.getByText(/Late cancellations are charged a 50% fee/i)).toBeVisible();
+
+  // "All documents" returns to the list.
+  await page.getByRole('button', { name: /All documents/i }).click();
+  await expect(page.getByRole('button', { name: 'View Cancellation Policy' })).toBeVisible();
 });

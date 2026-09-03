@@ -8,28 +8,43 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const INGEST_URL = 'https://n8n.example/webhook/coach-ingest';
+const PASSCODE = 'endpoint-test-pass';
 
 async function loadRoute() {
   vi.resetModules();
   return import('@/app/api/documents/route');
 }
 
-function uploadRequest(file: File | null): Request {
+/** Upload is gated by the admin passcode, so requests carry it by default. */
+function uploadRequest(file: File | null, code: string | null = PASSCODE): Request {
   const form = new FormData();
   if (file) form.append('file', file);
-  return new Request('http://localhost/api/documents', { method: 'POST', body: form });
+  return new Request('http://localhost/api/documents', {
+    method: 'POST',
+    headers: code ? { 'x-admin-passcode': code } : {},
+    body: form,
+  });
 }
 
 beforeEach(() => {
   process.env.N8N_INGEST_URL = INGEST_URL;
+  process.env.KNOWLEDGE_ADMIN_PASSCODE = PASSCODE;
 });
 
 afterEach(() => {
   delete process.env.N8N_INGEST_URL;
+  delete process.env.KNOWLEDGE_ADMIN_PASSCODE;
   vi.unstubAllGlobals();
 });
 
 describe('POST /api/documents', () => {
+  it('rejects an upload that omits the admin passcode', async () => {
+    const { POST } = await loadRoute();
+    const file = new File(['clinic knowledge base content'], 'sop.txt', { type: 'text/plain' });
+    const response = await POST(uploadRequest(file, null));
+    expect(response.status).toBe(401);
+  });
+
   it('is disabled when ingest is not configured', async () => {
     delete process.env.N8N_INGEST_URL;
     const { POST } = await loadRoute();

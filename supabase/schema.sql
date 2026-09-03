@@ -45,6 +45,12 @@ create table if not exists documents (
   embedding vector(1024)
 );
 
+-- Records when each chunk was ingested, so the knowledge base can show a "date
+-- added". Added via ALTER (not in the CREATE above) so it also lands on tables
+-- that already exist. n8n's Supabase Vector Store insert omits this column, so
+-- the default now() fills it in automatically on every ingest.
+alter table documents add column if not exists created_at timestamptz not null default now();
+
 -- Approximate nearest neighbour over cosine distance.
 create index if not exists documents_embedding_idx
   on documents using ivfflat (embedding vector_cosine_ops) with (lists = 100);
