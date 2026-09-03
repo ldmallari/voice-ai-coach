@@ -7,6 +7,9 @@
  * thin and the rules stay unit-testable without a running n8n.
  */
 
+import { timingSafeEqual } from 'node:crypto';
+import { isSupabaseConfigured, serverClient } from './supabase';
+
 /** The brief allows PDF and TXT only. */
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 
@@ -114,4 +117,100 @@ export async function ingestDocument(title: string, text: string): Promise<Inges
 /** Turns a file name into a human document title: drops the extension. */
 export function titleFromFilename(name: string): string {
   return name.replace(/\.[^.]+$/, '').trim() || 'Untitled document';
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge management: list and delete documents in the vector store.
+//
+// Destructive/listing operations are gated by an admin passcode so a public
+// deployment cannot have its knowledge base read or wiped by a stranger.
+// ---------------------------------------------------------------------------
+
+export interface StoredDocument {
+  title: string;
+  chunks: number;
+  /** ISO timestamp of the most recent chunk for this document, or null if unknown. */
+  uploadedAt: string | null;
+}
+
+export interface DocumentContent {
+  title: string;
+  chunks: number;
+  /** The extracted text the coach actually sees, chunks rejoined in insertion order. */
+  content: string;
+}
+
+/** True when the document store (Supabase) is reachable. */
+export function isStoreConfigured(): boolean {
+  return isSupabaseConfigured();
+}
+
+/** Lists documents in the store, grouped by title, with a chunk count and upload date each. */
+export async function listDocuments(): Promise<StoredDocument[]> {
+  const supabase = serverClient();
+  const { data, error } = await supabase.from('documents').select('metadata, created_at');
+  if (error) throw new Error(error.message);
+
+  type Row = { metadata?: { title?: string } | null; created_at?: string | null };
+  const acc = new Map<string, { chunks: number; uploadedAt: string | null }>();
+  for (const row of (data ?? []) as Row[]) {
+    const title = (row.metadata?.title ?? 'Untitled').trim() || 'Untitled';
+    const prev = acc.get(title) ?? { chunks: 0, uploadedAt: null };
+    const at = row.created_at ?? null;
+    // ISO timestamps compare lexicographically; keep the most recent chunk's date.
+    const uploadedAt = at && (!prev.uploadedAt || at > prev.uploadedAt) ? at : prev.uploadedAt;
+    acc.set(title, { chunks: prev.chunks + 1, uploadedAt });
+  }
+  return [...acc.entries()]
+    .map(([title, v]) => ({ title, chunks: v.chunks, uploadedAt: v.uploadedAt }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * Returns a document's full text by title: its chunks rejoined in insertion
+ * order (by id), so the owner can read back exactly what the coach ingested.
+ * Null when no document with that title exists.
+ */
+export async function getDocumentContent(title: string): Promise<DocumentContent | null> {
+  const supabase = serverClient();
+  const { data, error } = await supabase
+    .from('documents')
+    .select('content')
+    .filter('metadata->>title', 'eq', title)
+    .order('id', { ascending: true });
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as { content?: string | null }[];
+  if (rows.length === 0) return null;
+  const content = rows
+    .map((r) => (r.content ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  return { title, chunks: rows.length, content };
+}
+
+/** Deletes every chunk of a document by title. Returns how many chunks were removed. */
+export async function deleteDocument(title: string): Promise<number> {
+  const supabase = serverClient();
+  const { data, error } = await supabase
+    .from('documents')
+    .delete()
+    .filter('metadata->>title', 'eq', title)
+    .select('id');
+  if (error) throw new Error(error.message);
+  return (data ?? []).length;
+}
+
+/** True when an admin passcode is configured; management is disabled otherwise. */
+export function isAdminConfigured(): boolean {
+  return Boolean(process.env.KNOWLEDGE_ADMIN_PASSCODE);
+}
+
+/** Constant-time comparison of a supplied passcode against the configured one. */
+export function passcodeMatches(provided: string | null): boolean {
+  const expected = process.env.KNOWLEDGE_ADMIN_PASSCODE;
+  if (!expected || !provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }

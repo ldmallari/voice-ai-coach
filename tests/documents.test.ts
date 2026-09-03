@@ -4,6 +4,7 @@ import {
   hasUsableText,
   ingestDocument,
   isSupported,
+  passcodeMatches,
   titleFromFilename,
   validateUpload,
   MAX_UPLOAD_BYTES,
@@ -63,6 +64,32 @@ describe('hasUsableText', () => {
 describe('titleFromFilename', () => {
   it('drops the extension', () => {
     expect(titleFromFilename('Consultation SOP.pdf')).toBe('Consultation SOP');
+  });
+});
+
+describe('passcodeMatches', () => {
+  const OLD = process.env.KNOWLEDGE_ADMIN_PASSCODE;
+  afterEach(() => {
+    if (OLD === undefined) delete process.env.KNOWLEDGE_ADMIN_PASSCODE;
+    else process.env.KNOWLEDGE_ADMIN_PASSCODE = OLD;
+  });
+
+  it('accepts the configured passcode', () => {
+    process.env.KNOWLEDGE_ADMIN_PASSCODE = '022304';
+    expect(passcodeMatches('022304')).toBe(true);
+  });
+
+  it('rejects a wrong passcode (including a length mismatch)', () => {
+    process.env.KNOWLEDGE_ADMIN_PASSCODE = '022304';
+    expect(passcodeMatches('000000')).toBe(false);
+    expect(passcodeMatches('022')).toBe(false);
+  });
+
+  it('rejects when the passcode is unset or missing', () => {
+    delete process.env.KNOWLEDGE_ADMIN_PASSCODE;
+    expect(passcodeMatches('022304')).toBe(false);
+    process.env.KNOWLEDGE_ADMIN_PASSCODE = '022304';
+    expect(passcodeMatches(null)).toBe(false);
   });
 });
 

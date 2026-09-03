@@ -102,6 +102,43 @@ const UploadIcon = () => (
     <path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
   </svg>
 );
+const KnowledgeIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z" />
+    <path d="M8 3v18" />
+  </svg>
+);
+const TrashIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 7h16" />
+    <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+  </svg>
+);
+const ChevronIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+);
+const BackIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m15 6-6 6 6 6" />
+  </svg>
+);
+
+interface StoredDocument {
+  title: string;
+  chunks: number;
+  uploadedAt: string | null;
+}
+
+/** Formats an ISO upload timestamp as a short "Sep 3, 2026", or null when unknown. */
+function formatAdded(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 export default function Home() {
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -119,6 +156,18 @@ export default function Home() {
 
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+
+  const [kbOpen, setKbOpen] = useState(false);
+  const [passcode, setPasscode] = useState('');
+  const [kbUnlocked, setKbUnlocked] = useState(false);
+  const [docs, setDocs] = useState<StoredDocument[] | null>(null);
+  const [kbBusy, setKbBusy] = useState(false);
+  const [kbError, setKbError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [viewContent, setViewContent] = useState<string | null>(null);
+  const [viewBusy, setViewBusy] = useState(false);
+  const [viewError, setViewError] = useState<string | null>(null);
 
   const [overview, setOverview] = useState<{
     conversion: number;
@@ -372,17 +421,102 @@ export default function Home() {
     try {
       const form = new FormData();
       form.append('file', file);
-      const res = await fetch('/api/documents', { method: 'POST', body: form });
+      const res = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'x-admin-passcode': passcode },
+        body: form,
+      });
       const data = await res.json();
-      setUploadMsg(
-        res.ok
-          ? `Added “${data.title}” to the knowledge base.`
-          : `Upload failed: ${data.error}`,
-      );
+      if (res.ok) {
+        setUploadMsg(`Added “${data.title}” to the knowledge base.`);
+        void refreshDocs();
+      } else {
+        setUploadMsg(`Upload failed: ${data.error}`);
+      }
     } catch {
       setUploadMsg('Upload failed. Please try again.');
     } finally {
       setUploading(false);
+    }
+  }
+
+  /** Fetches the document list using the admin passcode; throws on a rejected code. */
+  async function fetchDocs(code: string): Promise<StoredDocument[]> {
+    const res = await fetch('/api/documents', { headers: { 'x-admin-passcode': code } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? `Failed (${res.status}).`);
+    return (data.documents ?? []) as StoredDocument[];
+  }
+
+  async function unlockKb() {
+    if (!passcode.trim() || kbBusy) return;
+    setKbBusy(true);
+    setKbError(null);
+    try {
+      setDocs(await fetchDocs(passcode));
+      setKbUnlocked(true);
+    } catch (error) {
+      setKbError(error instanceof Error ? error.message : 'Could not unlock.');
+    } finally {
+      setKbBusy(false);
+    }
+  }
+
+  async function refreshDocs() {
+    if (!kbUnlocked) return;
+    try {
+      setDocs(await fetchDocs(passcode));
+    } catch {
+      /* keep the current list on a transient failure */
+    }
+  }
+
+  function closeKb() {
+    setKbOpen(false);
+    setPendingDelete(null);
+    setKbError(null);
+    closeView();
+  }
+
+  /** Opens a document and loads its stored text (the chunks the coach ingested). */
+  async function viewDoc(title: string) {
+    setViewing(title);
+    setViewContent(null);
+    setViewError(null);
+    setViewBusy(true);
+    try {
+      const res = await fetch(`/api/documents?title=${encodeURIComponent(title)}`, {
+        headers: { 'x-admin-passcode': passcode },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status}).`);
+      setViewContent(data.content ?? '');
+    } catch (error) {
+      setViewError(error instanceof Error ? error.message : 'Could not load the document.');
+    } finally {
+      setViewBusy(false);
+    }
+  }
+
+  function closeView() {
+    setViewing(null);
+    setViewContent(null);
+    setViewError(null);
+  }
+
+  async function removeDoc(title: string) {
+    if (kbBusy) return;
+    setKbBusy(true);
+    try {
+      const res = await fetch(`/api/documents?title=${encodeURIComponent(title)}`, {
+        method: 'DELETE',
+        headers: { 'x-admin-passcode': passcode },
+      });
+      if (res.ok) setDocs((current) => (current ?? []).filter((d) => d.title !== title));
+    } catch {
+      /* leave the list unchanged on failure */
+    } finally {
+      setKbBusy(false);
     }
   }
 
@@ -411,26 +545,11 @@ export default function Home() {
             <span className="knob" />
           </span>
         </button>
-        <label className={`cx-ctrl cx-ctrl--file${uploading ? ' busy' : ''}`}>
-          <UploadIcon />
-          <span className="lab">{uploading ? 'Uploading…' : 'Upload PDF / TXT'}</span>
-          <input
-            type="file"
-            accept=".pdf,.txt,application/pdf,text/plain"
-            disabled={uploading}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void uploadDocument(f);
-              e.target.value = '';
-            }}
-          />
-        </label>
+        <button type="button" className="cx-ctrl" onClick={() => setKbOpen(true)}>
+          <KnowledgeIcon />
+          <span className="lab">Knowledge base</span>
+        </button>
       </header>
-      {uploadMsg && (
-        <div className="cx-head" style={{ paddingTop: 0, paddingBottom: 0 }}>
-          <span className="cx-upmsg">{uploadMsg}</span>
-        </div>
-      )}
 
       <main className="cx-main">
         {empty ? (
@@ -566,6 +685,163 @@ export default function Home() {
           </button>
         </form>
       </div>
+
+      {kbOpen && (
+        <div className="cx-modal-backdrop" onClick={closeKb}>
+          <div
+            className="cx-modal"
+            role="dialog"
+            aria-label="Knowledge base"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="cx-modal-head">
+              <h2>Knowledge base</h2>
+              <button className="cx-modal-close" onClick={closeKb} aria-label="Close">
+                ✕
+              </button>
+            </div>
+
+            {!kbUnlocked ? (
+              <div className="cx-kb-section">
+                <p className="cx-kb-intro">
+                  Your knowledge base is private. Enter the passcode to add, view, and manage your
+                  clinic&rsquo;s documents.
+                </p>
+                <form
+                  className="cx-kb-lock"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void unlockKb();
+                  }}
+                >
+                  <input
+                    className="cx-passcode"
+                    type="password"
+                    inputMode="numeric"
+                    value={passcode}
+                    onChange={(e) => setPasscode(e.target.value)}
+                    placeholder="Admin passcode"
+                    aria-label="Admin passcode"
+                    autoFocus
+                  />
+                  <button type="submit" className="cx-send" disabled={kbBusy || !passcode.trim()}>
+                    {kbBusy ? 'Checking…' : 'Unlock'}
+                  </button>
+                </form>
+                {kbError && <p className="cx-kb-error">{kbError}</p>}
+              </div>
+            ) : viewing ? (
+              <div className="cx-kb-section">
+                <button className="cx-kb-back" onClick={closeView}>
+                  <BackIcon />
+                  All documents
+                </button>
+                <div className="cx-view-title">{viewing}</div>
+                {viewBusy ? (
+                  <p className="cx-kb-empty">Loading…</p>
+                ) : viewError ? (
+                  <p className="cx-kb-error">{viewError}</p>
+                ) : (viewContent ?? '').trim().length === 0 ? (
+                  <p className="cx-kb-empty">This document has no readable text.</p>
+                ) : (
+                  <div className="cx-view-body">{viewContent}</div>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="cx-kb-section">
+                  <div className="cx-kb-label">Add a document</div>
+                  <label className={`cx-upload-drop${uploading ? ' busy' : ''}`}>
+                    <UploadIcon />
+                    <span>
+                      {uploading ? 'Uploading…' : 'Upload a PDF or TXT — re-uploading replaces it'}
+                    </span>
+                    <input
+                      type="file"
+                      accept=".pdf,.txt,application/pdf,text/plain"
+                      disabled={uploading}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void uploadDocument(f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {uploadMsg && <p className="cx-upmsg">{uploadMsg}</p>}
+                </div>
+
+                <div className="cx-kb-section">
+                  <div className="cx-kb-label">
+                    Documents{docs ? ` (${docs.length})` : ''}
+                  </div>
+                  {(docs ?? []).length === 0 ? (
+                    <p className="cx-kb-empty">No documents in the knowledge base yet.</p>
+                  ) : (
+                    <div className="cx-doclist">
+                      {(docs ?? []).map((d) => {
+                        const added = formatAdded(d.uploadedAt);
+                        return (
+                          <div key={d.title} className="cx-docitem">
+                            <button
+                              className="cx-docmain"
+                              onClick={() => viewDoc(d.title)}
+                              disabled={kbBusy}
+                              aria-label={`View ${d.title}`}
+                            >
+                              <span className="cx-docmeta">
+                                <span className="t">{d.title}</span>
+                                <span className="s">
+                                  {d.chunks} chunk{d.chunks === 1 ? '' : 's'}
+                                  {added && ` · Added ${added}`}
+                                </span>
+                              </span>
+                              <span className="cx-docchev" aria-hidden="true">
+                                <ChevronIcon />
+                              </span>
+                            </button>
+                            {pendingDelete === d.title ? (
+                              <div className="cx-confirm">
+                                <span className="q">Delete?</span>
+                                <button
+                                  className="cx-confirm-yes"
+                                  onClick={() => {
+                                    setPendingDelete(null);
+                                    void removeDoc(d.title);
+                                  }}
+                                  disabled={kbBusy}
+                                >
+                                  Delete
+                                </button>
+                                <button
+                                  className="cx-confirm-no"
+                                  onClick={() => setPendingDelete(null)}
+                                  disabled={kbBusy}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="cx-trash"
+                                onClick={() => setPendingDelete(d.title)}
+                                disabled={kbBusy}
+                                aria-label={`Delete ${d.title}`}
+                              >
+                                <TrashIcon />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {kbError && <p className="cx-kb-error">{kbError}</p>}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <audio ref={audioRef} hidden />
     </div>
