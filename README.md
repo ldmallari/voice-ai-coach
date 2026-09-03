@@ -16,7 +16,13 @@ saves the conversation, and can end a session with a prioritised action plan.
 
 The UI is a voice-first design in light "clinical" emerald: a living orb, a chat-and-voice
 composer (type a message or tap the orb to speak), a clinic KPI strip, and answers that reveal
-as they arrive.
+as they arrive with a chip naming the source they drew on.
+
+A passcode-gated **Knowledge base** panel manages the uploaded documents: list them with chunk
+counts and upload dates, open one to read the exact text the coach ingested, upload a PDF/TXT
+(re-uploading the same filename replaces it), and delete with a confirm step. The whole panel is
+owner-only, so a public deployment can't have its knowledge read, wiped, or polluted by a
+stranger.
 
 ## Stack
 
@@ -45,7 +51,7 @@ One agent, two retrieval paths, chosen by the question:
 
 | Workflow | Webhook | Role |
 |---|---|---|
-| Main Orchestration | `POST /webhook/coach-chat` | DeepSeek **AI Agent** with two tools: a Clinic Metrics HTTP tool (→ the app's `/api/tools`) and a native Supabase vector retrieve-as-tool for the knowledge base |
+| Main Orchestration | `POST /webhook/coach-chat` | DeepSeek **AI Agent** with two tools: a Clinic Metrics HTTP tool (→ the app's `/api/tools`) and a native Supabase vector retrieve-as-tool for the knowledge base. Reports which sources it used, so the UI can cite them |
 | Knowledge Ingest | `POST /webhook/coach-ingest` | Chunk → Cohere embed → upsert into the Supabase vector store |
 | Knowledge Retrieval | `POST /webhook/coach-retrieve` | Cohere embed → similarity search → matching passages |
 
@@ -59,8 +65,9 @@ to a language model. See `n8n/README.md` for workflow IDs, credentials and gotch
 | Route | Purpose |
 |---|---|
 | `POST /api/chat` | Answer a coaching turn (n8n primary, in-process fallback) |
-| `POST /api/tools` | Deterministic metric tools for the n8n agent (shared-secret) |
-| `POST /api/documents` | Upload a PDF/TXT → extract text → forward to n8n ingest |
+| `POST /api/tools` | Deterministic metric tools for the n8n agent (shared-secret). Includes `get_clinic_report` — the whole data picture in one call, so broad questions need one round-trip, not four |
+| `POST /api/documents` | Upload a PDF/TXT → extract text → forward to n8n ingest (replaces a same-named document) |
+| `GET · DELETE /api/documents` | List / read a document's text / delete it — all gated by `KNOWLEDGE_ADMIN_PASSCODE` |
 | `POST /api/voice/transcribe` · `POST /api/voice/speak` | Fish Audio ASR / TTS |
 | `POST /api/sessions` · `POST /api/sessions/[id]/end` | Save a session; summarise into an action plan |
 | `GET /api/overview` | Aggregate, non-identifying clinic KPIs for the header strip |
@@ -114,12 +121,17 @@ npm run dev
 
 ## Testing
 
-100 automated tests (`npm test`), plus `npm run lint`, `npm run typecheck`, `npm run build`.
+125 automated tests (`npm test`) plus a Playwright end-to-end smoke test (`npm run test:e2e`),
+alongside `npm run lint`, `npm run typecheck`, `npm run build`.
 
-- Unit tests for deterministic business logic (rates, segmentation, speech chunking)
-- Backend/integration tests for the tool, document, voice, overview and chat routes
-- Failure/regression cases (bad secret, unsupported upload, non-2xx voice/ingest)
+- Unit tests for deterministic business logic (rates, segmentation, speech chunking, the
+  consolidated `get_clinic_report` proven byte-identical to the granular tools)
+- Backend/integration tests for the tool, document, voice, overview and chat routes, and the
+  gated knowledge-management routes (list / read / delete)
+- Failure/regression cases (bad secret, missing passcode, unsupported upload, non-2xx voice/ingest)
+- An end-to-end browser smoke test of the core flow — hero KPIs, a typed question with its source,
+  and the knowledge panel (unlock, upload, read, delete-with-confirm) — with the backend stubbed
 - Paid voice and LLM APIs are mocked in CI to avoid unnecessary cost
 
-CI (GitHub Actions) runs lint + typecheck + tests + build on every push and PR; the same checks
-run in the Vercel build command, so a red check blocks the production deploy.
+CI (GitHub Actions) runs lint + typecheck + tests + build + the E2E on every push and PR; the same
+lint/typecheck/test/build run in the Vercel build command, so a red check blocks the production deploy.
