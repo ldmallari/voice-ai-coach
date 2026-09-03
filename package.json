@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "db:schema": "node scripts/apply-schema.mjs",
     "db:seed": "tsx scripts/seed.mjs",
-    "db:verify": "tsx scripts/verify.mjs"
+    "db:verify": "tsx scripts/verify.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
@@ -24,6 +25,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.7.5",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.2.18",
