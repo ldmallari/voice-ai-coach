@@ -42,9 +42,19 @@ export async function askN8nCoach(
     throw new Error(`n8n coach responded ${response.status}.`);
   }
 
-  const data = (await response.json()) as { answer?: string; output?: string };
+  const data = (await response.json()) as {
+    answer?: string;
+    output?: string;
+    sources?: unknown;
+  };
   const answer = (data.answer ?? data.output ?? '').trim();
   if (!answer) throw new Error('n8n coach returned an empty answer.');
 
-  return { answer, sources: [], path: 'both', toolCalls: [] };
+  // The workflow reports which sources it drew on (customer data / documents) so
+  // the UI can show source chips; older responses omit it, so default to none.
+  const sources = Array.isArray(data.sources)
+    ? data.sources.filter((s): s is string => typeof s === 'string')
+    : [];
+
+  return { answer, sources, path: 'both', toolCalls: [] };
 }
