@@ -61,3 +61,18 @@ test('a suggestion chip also produces an answer', async ({ page }) => {
   await page.getByRole('button', { name: 'What does our cancellation policy say?' }).click();
   await expect(page.getByText(/CoolSculpting is the one to fix/i)).toBeVisible();
 });
+
+test('uploading a document confirms it was added to the knowledge base', async ({ page }) => {
+  await page.route('**/api/documents', (route) =>
+    route.fulfill({ json: { ok: true, title: 'Clinic Policies', characters: 240 } }),
+  );
+  await page.goto('/');
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'policies.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('Clinic policy: late cancellations are charged a 50% fee.'),
+  });
+
+  await expect(page.getByText(/Added .*Clinic Policies.* to the knowledge base/i)).toBeVisible();
+});
