@@ -98,7 +98,9 @@ to a language model. See `n8n/README.md` for workflow IDs, credentials and gotch
   while **TTS runs on the free `s2.1-pro-free` model**.
 - **Output:** Fish Audio TTS. Because the free model renders slowly on long text (and would time
   out on a whole answer), answers are split into sentence-sized chunks and played back-to-back so
-  the full reply is spoken (`src/lib/speech.ts`).
+  the full reply is spoken (`src/lib/speech.ts`). Set `FISH_VOICE_ID` to a Fish reference voice so
+  every chunk speaks in one consistent voice — without it the free model picks a default speaker
+  per request, which can drift between chunks.
 
 ## Model choice
 

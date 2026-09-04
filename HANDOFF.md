@@ -56,8 +56,9 @@ can't be read, wiped, or polluted by a stranger.
 
 `.env.local` (gitignored; `.env.example` lists the names) holds `DEEPSEEK_API_KEY`,
 `DEEPSEEK_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`,
-`COHERE_API_KEY`, `COACH_TOOL_SECRET`, `FISH_AUDIO_API_KEY`, `KNOWLEDGE_ADMIN_PASSCODE` (gates
-the knowledge-management routes), and the `N8N_*` webhook URLs.
+`COHERE_API_KEY`, `COACH_TOOL_SECRET`, `FISH_AUDIO_API_KEY` (optionally `FISH_VOICE_ID` to pin a
+single reference voice), `KNOWLEDGE_ADMIN_PASSCODE` (gates the knowledge-management routes), and
+the `N8N_*` webhook URLs (`N8N_COACH_URL`, `N8N_INGEST_URL`, `N8N_RETRIEVAL_URL`).
 `.mcp.json` (gitignored) registers the n8n MCP server; start from the repo root or it won't
 connect. Vercel holds the same values as project env vars for production + preview.
 
